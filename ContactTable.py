@@ -234,15 +234,16 @@ class ContactTable():
         self.KSI_Cells.append(KSI_Cells)
         self.CON_Cells.append(CON_Cells)
 
-        self.ID_master.append(zeros((self.nxiGQP, self.nthetaGQP), dtype = np.int))
-        self.h.append(zeros((self.nxiGQP, self.nthetaGQP,4), dtype = np.float))
-        self.gN.append(zeros((self.nxiGQP, self.nthetaGQP), dtype = np.float))
+        new_act_cell = active_cells.shape[0]
+        self.ID_master.append(-999* ones((new_act_cell ,  self.nxiGQP, self.nthetaGQP), dtype = np.int))
+        self.h.append(np.nan * ones((new_act_cell, self.nxiGQP, self.nthetaGQP,4), dtype = np.float))
+        self.gN.append(np.nan *ones((new_act_cell, self.nxiGQP, self.nthetaGQP), dtype = np.float))
+        self.kN.append(self.kNmin)
 
 
         nAct = len(self.active_set)
         # list of arrays
-        for attr in ['active_set active_cells\
-                ID_master_Ctr hCtr KSI_Cells CON_Cells ID_master h gN']:
+        for attr in 'active_set active_cells ID_master_Ctr hCtr KSI_Cells CON_Cells ID_master h gN'.split(' '):
             assert len(getattr(self, attr)) == nAct
 
 
@@ -302,91 +303,89 @@ class ContactTable():
             # if one of the GQP is too much penetrated, we increase
             # the penalty for all the GQP
         """
-        ToIncr = np.argwhere(self.gN < maxPenAllow)
+        for ii in range( len(self.gN)):
+            ToIncr = np.argwhere(self.gN[ii] < maxPenAllow)
+            if ToIncr.shape[0] > 0:
+                #print('Some increase penalty stiff')
+                if Method == 0:
+                    # multiply the stiffness in a naive manner
+                    assert mul > 0
+                    if self.contact_type == 0:
+                        self.kN[ToIncr] *= mul
+                        IsCorrectPenStiff = False
+                    elif self.contact_type == 1:
+                        # there is only one kN per pair of curves but
+                        # several GQP and possible several integration
+                        # intervals
+                        """
+                        wrong because we end up with a mutliplier smaller
+                        than 1
+                        self.kN[ToIncr] *= (mul / ( self.nxiGQP *\
+                                self.nthetaGQP))
+                        self.kN[ToIncr[:3]] *= mul
+                        """
+                        pen_adjusted = 0
+                        # a slave curve can be in contact only once. This allows an efficient
+                        # sorting of the intergation intervals that might need a regulariaztion if the
+                        # constraint is too much violated in the average sense !
+                        # plus, with unique we are sure to only regularize once each interval
+                        for index in np.unique(ToIncr[:,:3], axis =0):
+                            if np.average(self.gN[tuple(index)]) < self.maxPenAllow:
+                                self.kN[tuple(index)] *= ( 1 + mul/(self.nxiGQP * self.nthetaGQP))
+                                pen_adjusted += 1
+                                IsCorrectPenStiff = False
 
+                        print('stiff of %d elements adjusted'%(pen_adjusted))
 
-        if ToIncr.shape[0] > 0:
-            #print('Some increase penalty stiff')
-            if Method == 0:
-                # multiply the stiffness in a naive manner
-                assert mul > 0
-                if self.contact_type == 0:
-                    self.kN[ToIncr] *= mul
-                    IsCorrectPenStiff = False
-                elif self.contact_type == 1:
-                    # there is only one kN per pair of curves but
-                    # several GQP and possible several integration
-                    # intervals
-                    """
-                    wrong because we end up with a mutliplier smaller
-                    than 1
-                    self.kN[ToIncr] *= (mul / ( self.nxiGQP *\
-                            self.nthetaGQP))
-                    self.kN[ToIncr[:3]] *= mul
-                    """
-                    pen_adjusted = 0
-                    # a slave curve can be in contact only once. This allows an efficient
-                    # sorting of the intergation intervals that might need a regulariaztion if the
-                    # constraint is too much violated in the average sense !
-                    # plus, with unique we are sure to only regularize once each interval
-                    for index in np.unique(ToIncr[:,:3], axis =0):
-                        if np.average(self.gN[tuple(index)]) < self.maxPenAllow:
-                            self.kN[tuple(index)] *= ( 1 + mul/(self.nxiGQP * self.nthetaGQP))
-                            pen_adjusted += 1
-                            IsCorrectPenStiff = False
-
-                    print('stiff of %d elements adjusted'%(pen_adjusted))
-
+                    else:
+                        raise NotImplementedError
+                elif Method == 1:
+                    mul_min =\
+                        np.min(\
+                        (self.gN[ToIncr] * (maxPenAllow)**(-1),
+                        mul * ones(ToIncr.shape[0])), axis = 0)
+                    # penalty regularization like Durville
+                    if self.contact_type == 0:
+                        self.kN[ToDecr] *= mul_min
+                    elif self.contact_type == 1:
+                        # there is only one kN per pair of curves but
+                        # several GQP and possiblu several integration
+                        # intervals
+                        self.kN[ToDecr[:-2],] *= mul_min
+                    else:
+                        raise NotImplementedError
                 else:
                     raise NotImplementedError
-            elif Method == 1:
-                mul_min =\
-                    np.min(\
-                    (self.gN[ToIncr] * (maxPenAllow)**(-1),
-                    mul * ones(ToIncr.shape[0])), axis = 0)
+
+            """
+            if ToDecr[0].shape[0] > 0:
+                print('Some Decrease penalty stiff')
+                #corrected = np.max(self.kNmin,\
+                #        0.1 * ones(ToDecr.shape[0]), axis = 0)
+                corrected = self.kNmin
                 # penalty regularization like Durville
                 if self.contact_type == 0:
-                    self.kN[ToDecr] *= mul_min
+                    self.kN[ToDecr] = corrected
                 elif self.contact_type == 1:
                     # there is only one kN per pair of curves but
                     # several GQP and possiblu several integration
                     # intervals
-                    self.kN[ToDecr[:-2],] *= mul_min
+                    self.kN[ToDecr[:-2],] = corrected
                 else:
                     raise NotImplementedError
-            else:
-                raise NotImplementedError
+            """
 
-
-        """
-        if ToDecr[0].shape[0] > 0:
-            print('Some Decrease penalty stiff')
-            #corrected = np.max(self.kNmin,\
-            #        0.1 * ones(ToDecr.shape[0]), axis = 0)
-            corrected = self.kNmin
-            # penalty regularization like Durville
-            if self.contact_type == 0:
-                self.kN[ToDecr] = corrected
-            elif self.contact_type == 1:
-                # there is only one kN per pair of curves but
-                # several GQP and possiblu several integration
-                # intervals
-                self.kN[ToDecr[:-2],] = corrected
-            else:
-                raise NotImplementedError
-        """
-
-        display_message = False
-        if display_message:
-            max_penet = np.min(self.gN)
-            if max_penet < self.critical_penetration:
-                raise MaximumPenetrationError
-            print('MAXIMUM PENETRATION IS ' + repr(-np.min(self.gN)))
-            print('MAXIMUM PEN STIFF IS ' + repr(np.max(self.kN)))
-        else:
-            if len(self.gN) > 0:
-                if np.min(self.gN) <  self.critical_penetration:
+            display_message = False
+            if display_message:
+                max_penet = np.min(self.gN)
+                if max_penet < self.critical_penetration:
                     raise MaximumPenetrationError
+                print('MAXIMUM PENETRATION IS ' + repr(-np.min(self.gN)))
+                print('MAXIMUM PEN STIFF IS ' + repr(np.max(self.kN)))
+            else:
+                if len(self.gN[ii]) > 0:
+                    if np.min(self.gN[ii]) <  self.critical_penetration:
+                        raise MaximumPenetrationError
 
         assert not np.any(np.asarray(self.kN) / self.kNmin > 1e7),\
         'relative increase of the penalty stiffness too important'

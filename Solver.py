@@ -128,6 +128,9 @@ class Solver():
         self.is_set_initial_u = True
         self.initial_u = initial_u
 
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
     def set_variant_to_compute_residual(self, method_chosen):
         try:
             assert method_chosen in [0,1]
@@ -135,10 +138,16 @@ class Solver():
             raise NotImplementedError
         self.variant_to_compute_residual = method_chosen
 
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
     def set_control_inf_norm(self, arg):
         assert isinstance(arg, bool)
         self.control_inf_norm = arg
 
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
     def set_restore_to_prev_converge_if_AS_wrong(self, arg):
         assert isinstance(arg, bool)
         self.restore_to_prev_converge_if_AS_wrong = arg
@@ -350,6 +359,7 @@ class Solver():
         Outer_Loop_counter = 0
         self.printBeginStepMsg(self.stp)
         self.DEL_u =  zeros((self.tot_ndofs,), dtype=np.float)
+
         while not CONSTRAINTS_OK:
             # the update of the config must be made iteration per iteration
             du = zeros((self.tot_ndofs,), dtype=np.float)
@@ -421,6 +431,7 @@ class Solver():
 
             # verifies correctness of the active set
             if FEM.HasConstraints:
+
                 CONSTRAINTS_OK =\
                 FEM.check_current_active_set(self.stp)
 
