@@ -1031,15 +1031,14 @@ class Solver():
                 # lengths
 
                 # IMPORTANT NOTEL: tuple(np.argwhere(Tab.active_set).T) == np.where(Tab.active_set)
-                AS = np.argwhere(Tab.active_set)
+                AS = Tab.active_set
                 # has to flatten to be saved
-                fileh.root.TS.active_set.append(AS.flatten())
-                AS = tuple(AS.T)
+                fileh.root.TS.active_set.append(AS)
                 #fileh.root.TS.gN.append(Tab.gN[AS])
                 if self.FEM.enforcement == 1:
-                    fileh.root.TS.LM.append(Tab.LM[AS])
+                    fileh.root.TS.LM.append(Tab.LM)
                 elif self.FEM.enforcement == 0:
-                    fileh.root.TS.kN.append(Tab.kN[AS])
+                    fileh.root.TS.kN.append(Tab.kN)
                 else:
                     raise ValueError('case not recognized')
 

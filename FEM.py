@@ -34,7 +34,8 @@ from joblib import Parallel, delayed
 from joblib.pool import has_shareable_memory
 import multiprocessing
 from Common.cython_ext import narrow_phase
-from Common.pyobb.pyobb.obb import OBB
+from pyobb.obb import OBB
+
 #------------------------------------------------------------------------------
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
                             # MODEL CLASS
@@ -468,6 +469,7 @@ class Model():
         #assert np.allclose(sum_w_gn, sum_w_gn_py)
         #if not np.any(np.isnan(sum_w_LM_py)):
         #    assert np.allclose(sum_w_LM, sum_w_LM_py)
+        """
         if self.enforcement == 1:
             to_activate = where(Tab.active_set == 0 and Tab.weak_constraint < 0)
             to_deactivate = where(Tab.active_set == 1 and Tab.weak_enforcement > 1e-10)
@@ -510,6 +512,7 @@ class Model():
                 else:
                     if Tab.active_set[ii]:
                         Tab.active_set[ii] = False
+        """
 
     #------------------------------------------------------------------------------
     #
@@ -661,7 +664,7 @@ class Model():
             nmclose = len(master_close[0])
             if is_active_slave and nmclose == 0:
                 raise ValueError('complete loss of contact not allowed')
-            if nmclose >0:
+            if not is_active_slave and nmclose >0:
                 assert np.array_equal(np.unique(master_close), np.array(master_close).ravel())
                 # construct slave obb
                 id_els_sl = self.el_per_curves[slave]
@@ -723,146 +726,173 @@ class Model():
 
                     if len(has_int_xi_lim) == 0 or len(has_int_theta_lim) == 0 :
                         raise ValueError('No slave interval intersecting master curves has not been found')
+
                     # construct integration interval from intersection between obb
                     has_int_xi_lim = asarray(has_int_xi_lim)
                     has_int_theta_lim = asarray(has_int_theta_lim)
 
-                    # this interval of integration will be left unchanged during all the time step !
+                    # this interval will be the one on which we will construct the cells
                     xi_lim_slv = array([np.min(has_int_xi_lim[:,0], axis = 0),\
                             np.max(has_int_xi_lim[:,1], axis = 0)]).ravel()
                     theta_lim_slv = array( [np.min(has_int_theta_lim[:,0], axis = 0),\
                             np.max(has_int_theta_lim[:,1] , axis = 0)] ).ravel()
-                    h = zeros((nxiGQP,nthetaGQP, 4))
-                    # the last index is to store the weigth for the xi and theta separately
-                    w = zeros((nxiGQP,nthetaGQP, 2))
-                    gN = zeros((nxiGQP,nthetaGQP))
-                    ID_master = zeros((nxiGQP,nthetaGQP))
-                    if is_active_slave:
-                        LM = Tab.query_dofs_slave(slave)
-                        weak_enforcement_new = 0
-                    else:
-                        weak_constraint = 0
 
-                    for mm in range(nxiGQP):
-                        for nn in range(nthetaGQP):
-                            #index_GQP = (id_curves[0], ii, jj,  mm,nn)
-                            h[mm,nn,0], w[mm,nn,0] =\
-                                 TransformationQuadraturePointsAndWeigths1D(\
-                                 xi_lim_slv,
-                                 nuxiGQP[mm], WnuxiGQP[mm])
-                            # fixed slave coordinates
-                            h[mm,nn,1], w[mm,nn,1] =\
-                                    TransformationQuadraturePointsAndWeigths1D(\
-                                     theta_lim_slv,
-                                     nuthetaGQP[nn],
-                                     WnuthetaGQP[nn])
-                            xGQP = self.get_surf_point_smoothed_geo(id_els_sl, array([ h[mm,nn,0],\
-                                h[mm,nn,1]]))
+                    # TODO: must be generalized
+                    nxi = Tab.nxiGQP
+                    ntheta = Tab.nthetaGQP
+                    # cut the interval in unit cell
+                    KSI, con = generation_grid_quadri_and_connectivity(
+                            xi_lim_slv, theta_lim_slv, nxi, ntheta)
+                    # convective coord center of the cell
+                    KSIC = 0.5 * (KSI[con[:,0],] + KSI[con[:,2],] )
+                    # area in the space of the convective coordinates
+                    wxi =  (KSI[con[:,1],] - KSI[con[:,0],])[:,0]
+                    wtheta = (KSI[con[:,3],] - KSI[con[:,0],])[:,1]
 
-                            # among the possible master candidates, spot the closest sampled
-                            # point from the current GQP
-                            d_FG = np.inf
-                            # TODO : if I reshape the array of sampled points on the master and I
-                            # use unravel_index, I avoid the for loop
-                            for uu in range(nmclose):
-                                Dist = norm((samp_on_master_candi[uu]- xGQP), axis = 2)
-                                idx = np.unravel_index( Dist.argmin(), (samp_on_master_candi[uu].shape[:2]))
-                                if Dist[idx] < d_FG:
-                                    d_FG = Dist[idx]
-                                    idx_min = (uu, idx[0], idx[1])
+                    if Tab.enforcement == 1:
+                        weak_enforcement_new, weak_constraint = (0,) * 2
+                    KSISol = zeros((KSIC.shape[0], 2))
+                    gNSol = zeros((KSIC.shape[0]))
+                    IDM = zeros((KSIC.shape[0]))
 
+                    # for each cell, measure gN at its center
+                    for ii, KSICii in enumerate(KSIC):
+                        xGQP = self.get_surf_point_smoothed_geo(id_els_sl, KSICii)
+                        # among the possible master candidates, spot the closest sampled
+                        # point from the current GQP
+                        d_FG = np.inf
+                        # TODO : if I reshape the array of sampled points on the master and I
+                        # use unravel_index, I avoid the for loop
+                        for uu in range(nmclose):
+                            Dist = norm((samp_on_master_candi[uu]- xGQP), axis = 2)
+                            idx = np.unravel_index( Dist.argmin(), (samp_on_master_candi[uu].shape[:2]))
+                            if Dist[idx] < d_FG:
+                                d_FG = Dist[idx]
+                                idx_min = (uu, idx[0], idx[1])
 
-                            current_mcurve = master_close[0][idx_min[0]]
-                            hFG = array([xi_mstr[idx_min[1]], theta_mstr[idx_min[2]]])
-                            current_curves = array([slave, current_mcurve])
-                            id_els = self.el_per_curves[(current_curves,)].ravel()
-                            # do not remove this assert. Otherwise would be very hard to debug
-                            assert np.allclose(samp_on_master_candi[(idx_min)],\
-                                self.get_surf_point_smoothed_geo(id_els[(2,3),], hFG))
+                        current_mcurve = master_close[0][idx_min[0]]
+                        hFG = array([xi_mstr[idx_min[1]], theta_mstr[idx_min[2]]])
+                        current_curves = array([slave, current_mcurve])
+                        id_els = self.el_per_curves[(current_curves,)].ravel()
+                        # do not remove this assert. Otherwise would be very hard to debug
+                        assert np.allclose(samp_on_master_candi[(idx_min)],\
+                            self.get_surf_point_smoothed_geo(id_els[(2,3),], hFG))
 
-                            (gNsol, hSol,
-                                    w_nm,\
+                        Sol_correct = 0
+                        ct_corrections = 0
+
+                        while not Sol_correct:
+                            (gNii, hii,
+                                    w_ii,\
                                     ExitCode) = \
                                     self.gN_GQP_IntInt2IntInt(\
                                     current_curves,\
-                                    h[mm,nn,0],\
-                                    w[mm,nn,0],
-                                    h[mm,nn,1],\
-                                    w[mm,nn,1],
+                                    KSICii[0],
+                                    wxi[ii],
+                                    KSICii[1],
+                                    wtheta[ii],
                                     hFG)
 
+
                             assert ExitCode == 1
-                            if not -1e-10 < hSol[0] < 1+1e-10:
-                                if hSol[0] < 0 :
-                                    assert hSol[0] > -0.1
-                                    hFG = np.asarray(hSol)
+                            if not -1e-10 < hii[0] < 1+1e-10:
+                                if hii[0] < 0 :
+                                    assert hii[0] > -1.
+                                    hFG = np.asarray(hii)
                                     hFG[0] = 1
                                     current_mcurve -= 1
                                     current_curves = array([slave, current_mcurve])
 
-                                elif hSol[0] > 1 :
-                                    assert hSol[0] < 1.1
-                                    hFG = np.asarray(hSol)
+                                elif hii[0] > 1 :
+                                    assert hii[0] < 2
+                                    hFG = np.asarray(hii)
                                     hFG[0] = 0
                                     current_mcurve += 1
                                     current_curves = array([slave, current_mcurve])
+                                ct_corrections += 1
+                                if ct_corrections >= 10:
+                                    raise ValueError('could not find master curve')
+                            else:
+                                Sol_correct = 1
 
-                                (gNsol, hSol,
-                                            w_nm,\
-                                            ExitCode) = \
-                                            self.gN_GQP_IntInt2IntInt(\
-                                            current_curves,\
-                                            h[mm,nn,0],\
-                                            w[mm,nn,0],
-                                            h[mm,nn,1],\
-                                            w[mm,nn,1],
-                                            hFG)
-                                if not -1e-10 < hSol[0] < 1+1e-10:
-                                    assert ValueError
 
-                            h[mm,nn,(2,3),] = hSol
-                            gN[mm,nn] = gNsol
-                            ID_master[mm,nn] = current_curves[1]
+                            KSISol[ii] = hii
+                            gNSol[ii] = gNii
+                            IDM[ii] = current_curves[1]
                             # the solution might correspond to a max if there is no
                             # penetration
                             # therefore, doing d_final < d_FG is pointless
 
-                            if gNsol < Tab.critical_penetration:
+                            if gNii < Tab.critical_penetration:
                                 # Fatal error
                                 plot_problematic_area()
 
                                 set_trace()
-                                xGQP = self.get_surf_point_smoothed_geo(id_els_sl, array([ h[mm,nn,0],\
-                                    h[mm,nn,1]]))
-                                (gNsol, hSol,
-                                        w_nm,\
-                                        ExitCode) = \
-                                        self.gN_GQP_IntInt2IntInt(\
-                                        current_curves,\
-                                        h[mm,nn,0],\
-                                        w[mm,nn,0],
-                                        h[mm,nn,1],\
-                                        w[mm,nn,1],
-                                        hFG)
+                                xGQP = self.get_surf_point_smoothed_geo(id_els_sl,
+                                        KSICii)
 
-                            if is_active_slave:
-                                # interpolate LM
-                                set_trace()
-                                LMnm
-                                # TODO
-                                weak_enforcement_new += LMnm * w_nm
-                            else:
-                                weak_constraint += w_nm * gN[mm,nn]
+                                (gNii, hii,
+                                    w_ii,\
+                                    ExitCode) = \
+                                    self.gN_GQP_IntInt2IntInt(\
+                                    current_curves,\
+                                    KSICii[0],
+                                    wxi[ii],
+                                    KSICii[1],
+                                    wtheta[ii],
+                                    hFG)
+
+                            if Tab.enforcement == 1:
+                                if is_active_slave:
+                                    # interpolate LM
+                                    set_trace()
+                                    LMnm
+                                    # TODO
+                                    weak_enforcement_new += LMnm * w_ii
+                                else:
+                                    weak_constraint += w_ii * gNii
 
                     # was the slave already present in the contact list ?
                     # if not create new entry in the contact table
-                    if is_active_slave and weak_enforcement > 0:
-                         to_deactivate.append(slave)
-                    else:
-                        if weak_constraint < 0:
-                            set_trace()
-                            to_activate.append(slave)
-                            # store the results of the contact detection
+                    if Tab.enforcement == 1:
+                        raise ValueError('Deprecated')
+                        if is_active_slave and weak_enforcement > 0:
+                             to_deactivate.append(slave)
+                        else:
+                            if weak_constraint < 0:
+                                set_trace()
+                                to_activate.append(slave)
+                                # store the results of the contact detection
+                    elif Tab.enforcement == 0:
+
+                        # select all the cells where the gap is small enough as part of
+                        # the integration domain
+                        active_cells = np.where(gNSol <  Tab.epsilon)
+                        """
+                        if active_cells[0].shape[0] > 0:
+                            for jj, KSICjj in enumerate(KSIC):
+                                if jj in active_cells[0]:
+                                    color = (1.,0.,0.)
+                                else:
+                                    color = (0., 1., 0.)
+                                xslC = self.get_surf_point_smoothed_geo(id_els_sl,
+                                        KSICjj)
+                                mlab.points3d(xslC[0],
+                                        xslC[1],
+                                        xslC[2], scale_factor = 0.01,
+                                        color = color )
+                            self.plot(opacity = 0.1)
+                        """
+                        if is_active_slave:
+                            if active_cells[0].shape[0] == 0:
+                                to_deactivate.append(slave)
+                            else:
+                                set_trace()
+                                # have the active cells changed ?
+                        else:
+                            if active_cells[0].shape[0] > 0:
+                                Tab.new_el(slave, active_cells,\
+                                        IDM, KSISol, KSI, con )
 
 
     #------------------------------------------------------------------------------
@@ -873,8 +903,7 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def gN_GQP_IntInt2IntInt(
-                     self,\
+    def gN_GQP_IntInt2IntInt( self,\
                      id_curves,\
                      xiGQP,\
                      WxiGQP,\

@@ -586,11 +586,12 @@ def generation_grid_quadri_and_connectivity(X, Y, nx, ny):
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def plot_regular_grid(X, con):
+def plot_cells_regular_grid(X, con, In2D = False):
     """
     designed to work with generation_grid_quadri_and_connectivity
     """
-    import matplotlib.pylab as plt
+    if In2D:
+        import matplotlib.pylab as plt
     plt.close('all')
     ncel = con.shape[0]
     for i in range(ncel):
@@ -600,9 +601,17 @@ def plot_regular_grid(X, con):
                 con[i][2],
                 con[i][3],
                 con[i][0]),]
-        plt.plot(xCell[:,0],
-                xCell[:,1])
-    plt.pause(1e-5)
+        xCenter = 0.5 * (X[con[i][0]] + X[con[i][2]])
+        if In2D:
+            plt.plot(xCell[:,0],
+                    xCell[:,1])
+            plt.scatter(xCenter[0], xCenter[1])
+        else:
+            mlab.plot3d(xCell[:,0],
+                    xCell[:,1],
+                    xCell[:,2])
+            mlab.points3d(xCenter[0], xCenter[1],xCenter[1])
+    if In2D: plt.pause(1e-5)
 
 #------------------------------------------------------------------------------
 #

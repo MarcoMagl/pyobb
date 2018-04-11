@@ -56,6 +56,9 @@ class ContactTable():
         else:
             raise NotImplementedError
 
+        self.value_epsilon_set = False
+        self._epsilon = None
+
 
     #------------------------------------------------------------------------------
     #
@@ -145,27 +148,44 @@ class ContactTable():
             # https://stackoverflow.com/questions/29839350/numpy-append-vs-python-append
             # way faster to deal with list and convert to np.array if needed
 
+            """
             # list of int
             self.ID_slave = np.array([], dtype = int)
             # list of list of int
             self.ID_master= np.array([], dtype = int)
             # list of np.array of dim GP_xi * GP_theta
             self.gN =  np.array([], dtype = float)
-            # list of list of len = 2
-            self.xi_lim_integration =  np.array([], dtype = float)
-            # list of list of len = 2
-            self.theta_lim_integration = np.array([], dtype = float)
             # list of array of dim dim GP_xi * GP_thetal * 4
             self.h = np.array([],  dtype = float)
             # list of array of dim dim GP_xi * GP_theta
             self.wGP = np.array([],  dtype = float)
             # list of bool
             self.active_set = np.array([], dtype = np.bool)
-            #self.active = []
-            # list of array of dim Nctc * nLM_per_ctc
-            self.LM =  np.array([], dtype = float)
-            # list of array of dim Nctc * nLM_per_ctc
-            self.dofs_LM = np.array([], dtype = int)
+            """
+            for attr in 'ID_slave ID_master gN hSolCtr active_cells KSI CON active_set'.split(' '):
+                setattr(self, attr, [])
+            """
+            # list of int
+            self.ID_slave = []
+            # list of list of int
+            self.ID_master= []
+            # list of np.array of dim GP_xi * GP_theta
+            self.gN = []
+            # list of array of dim dim GP_xi * GP_thetal * 4
+            self.h = []
+            self.active_cells = []
+            """
+
+            if self.enforcement == 1:
+                # list of array of dim Nctc * nLM_per_ctc
+                self.LM =  [] #np.array([], dtype = float)
+                # list of array of dim Nctc * nLM_per_ctc
+                self.dofs_LM = np.array([], dtype = int)
+            elif self.enforcement == 0:
+                self.kN =  [] # np.array([], dtype = float)
+            else:
+                raise NotImplementedError
+
             # list of float
             self.weak_enforcement= np.array([], dtype = float)
             self.weak_constraint= np.array([], dtype = float)
@@ -190,7 +210,6 @@ class ContactTable():
             must be >1'
         self.Multiplier_Pen = coeff_mul
         self.kNmin = kNmin
-        self.kN[:] = kNmin
 
 
     #------------------------------------------------------------------------------
@@ -200,6 +219,25 @@ class ContactTable():
         assert critical_penetration < 0
         self.critical_penetration = critical_penetration
 
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def new_el(self, slave, active_cells,\
+            IDM, KSISol, KSI, CON ):
+        self.active_set.append(slave)
+        self.active_cells.append(active_cells)
+        self.ID_master.append(IDM)
+        self.hSolCtr.append(KSISol)
+        self.KSI.append(KSI)
+        self.CON.append(CON)
+
+        nAct = len(self.active_set)
+        # list of arrays
+        for attr in ['active_set',  'active_cells',\
+                'ID_master', 'hSolCtr', 'KSI', 'CON']:
+            assert len(getattr(self, attr)) == nAct
 
 
     #------------------------------------------------------------------------------
@@ -314,12 +352,6 @@ class ContactTable():
                 raise NotImplementedError
 
 
-        if self.contact_type == 0:
-            ToDecr = np.logical_and(self.gN > 0, self.kN > self.kNmin)
-        elif self.contact_type == 1:
-            ToDecr = np.where(self.active_set == 0)
-            self.kN[ToDecr] = self.kNmin
-
         """
         if ToDecr[0].shape[0] > 0:
             print('Some Decrease penalty stiff')
@@ -346,13 +378,32 @@ class ContactTable():
             print('MAXIMUM PENETRATION IS ' + repr(-np.min(self.gN)))
             print('MAXIMUM PEN STIFF IS ' + repr(np.max(self.kN)))
         else:
-            if np.min(self.gN) <  self.critical_penetration:
-                raise MaximumPenetrationError
+            if len(self.gN) > 0:
+                if np.min(self.gN) <  self.critical_penetration:
+                    raise MaximumPenetrationError
 
-        assert not np.any(self.kN / self.kNmin > 1e7),\
+        assert not np.any(np.asarray(self.kN) / self.kNmin > 1e7),\
         'relative increase of the penalty stiffness too important'
 
         return IsCorrectPenStiff
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    @property
+    def epsilon(self):
+        assert self.value_epsilon_set, 'value of epsilon not set'
+        return self._epsilon
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    @epsilon.setter
+    def epsilon(self, value):
+        assert value > 0
+        self.value_epsilon_set = True
+        # without underscore infiinte number of recursion
+        self._epsilon = value
+
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
