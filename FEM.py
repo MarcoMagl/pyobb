@@ -377,7 +377,7 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def get_pairs_curves_to_check(self,):
+    def broad_phase(self,):
         for i in range(self.nCurves):
             self.box_lim[i,] =\
                          self.get_bounding_box_one_curve(\
@@ -404,24 +404,13 @@ class Model():
                 if (norm(self.ctr_box[ii] - self.ctr_box[jj]) -\
                         (self.r_sphbox[ii] + self.r_sphbox[jj])) < 1e-10:
                     # the enclosing spheres are close enough
-                    Tab.pairs_to_check[ii,jj] = True
-                else:
-                    Tab.pairs_to_check[ii,jj] = False
+                    # closer look at the bounding boxes to see if they are intersecting
+                    bYMii = self.box_lim[ii]
+                    bYSjj = self.box_lim[jj]
+                    Tab.close_curves[ii, jj] =\
+                    collision_bounding_boxes(bYMii, bYSjj)
 
 
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def get_pairs_curves_close(self,):
-        Tab = self.ContactTable
-        for pair_curve in np.argwhere(Tab.pairs_to_check):
-            bYMii = self.box_lim[pair_curve[0]]
-            bYSjj = self.box_lim[pair_curve[1]]
-            #BeamMod.plot_one_smoothed_surface(conCurveYM[ii],color= (0.,0.,1.))
-            # where the contact will be checked !
-            self.ContactTable.close_curves[pair_curve[0],
-                    pair_curve[1]]=\
-            collision_bounding_boxes(bYMii, bYSjj)
 
     #------------------------------------------------------------------------------
     #
@@ -433,10 +422,8 @@ class Model():
         if not self.is_set_ContactTable:
             raise ValueError('The contact table must be set! Use set_Contact_Table method ')
         Tab = self.ContactTable
-        # bounding sphere intersections
-        self.get_pairs_curves_to_check()
-        # bounding box intersections
-        self.get_pairs_curves_close()
+        # ABB intersection
+        self.broad_phase()
         # return bool: true if AS was correct
         return self.narrow_phase()
 
@@ -2517,8 +2504,8 @@ class Model():
                     if np.any(np.isnan(hFG)):
                         assert np.all(np.isnan(hFG))
                         hFG = Tab.hCtr[ii][jj]
-                    else:
-                        set_trace()
+                    #else:
+                    #    set_trace()
 
                     if Tab.enforcement == 0 :
                         value_in = Tab.kN[ii]
@@ -2553,7 +2540,6 @@ class Model():
                             ct_corrections += 1
                             if ct_corrections > max_corr:
                                 raise ValueError
-                            set_trace()
 
                             id_els = self.el_per_curves[current_curves,].ravel()
                             xGQP = self.get_surf_point_smoothed_geo(id_els[(0,1),], array([ xiGQP,\
