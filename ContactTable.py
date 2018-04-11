@@ -162,7 +162,8 @@ class ContactTable():
             # list of bool
             self.active_set = np.array([], dtype = np.bool)
             """
-            for attr in 'ID_slave ID_master gN hSolCtr active_cells KSI CON active_set'.split(' '):
+            for attr in 'ID_slave ID_master ID_master_Ctr gN \
+                    active_cells KSI_Cells CON_Cells hCtr h active_set'.split(' '):
                 setattr(self, attr, [])
             """
             # list of int
@@ -225,18 +226,23 @@ class ContactTable():
     #
     #------------------------------------------------------------------------------
     def new_el(self, slave, active_cells,\
-            IDM, KSISol, KSI, CON ):
+            IDM, hCtr, KSI_Cells, CON_Cells ):
         self.active_set.append(slave)
         self.active_cells.append(active_cells)
-        self.ID_master.append(IDM)
-        self.hSolCtr.append(KSISol)
-        self.KSI.append(KSI)
-        self.CON.append(CON)
+        self.ID_master_Ctr.append(IDM)
+        self.hCtr.append(hCtr)
+        self.KSI_Cells.append(KSI_Cells)
+        self.CON_Cells.append(CON_Cells)
+
+        self.ID_master.append(zeros((self.nxiGQP, self.nthetaGQP), dtype = np.int))
+        self.h.append(zeros((self.nxiGQP, self.nthetaGQP,4), dtype = np.float))
+        self.gN.append(zeros((self.nxiGQP, self.nthetaGQP), dtype = np.float))
+
 
         nAct = len(self.active_set)
         # list of arrays
-        for attr in ['active_set',  'active_cells',\
-                'ID_master', 'hSolCtr', 'KSI', 'CON']:
+        for attr in ['active_set active_cells\
+                ID_master_Ctr hCtr KSI_Cells CON_Cells ID_master h gN']:
             assert len(getattr(self, attr)) == nAct
 
 

@@ -2552,146 +2552,54 @@ class Model():
         nuthetaGQP, WnuthetaGQP =\
         np.polynomial.legendre.leggauss(nthetaGQP)
 
-        AS = np.argwhere(Tab.active_set)
-        nGQP_active = AS.shape[0] * nxiGQP * nthetaGQP
-
         # for the time being the master has always the same limit
         xi_lim_mstr = array([0,1])
         theta_lim_mstr = array([0, 2 * np.pi])
-        for kk, index_el in enumerate(AS):
-            for (ii,jj) in product(range(nxiGQP), range(nthetaGQP)):
-                index_GQP = tuple(index_el) + (ii,jj)
 
-                id_slv, id_xi_slv, id_theta_slv, id_xi_GQP,\
-                id_theta_GQP = index_GQP
-                id_mstr = Tab.master_ID_forCPP[index_GQP]
 
-                for idiii in (id_slv, id_xi_slv,
-                        id_theta_slv, id_xi_GQP, id_theta_GQP,
-                        id_mstr):
-                    assert idiii >= 0
+        for ii, id_slv in enumerate(Tab.active_set):
+            con = Tab.CON_Cells[ii]
+            KSI = Tab.KSI_Cells[ii]
+            for jj, cell in enumerate(Tab.active_cells):
+                # get the limit of the cell
+                KSI_Cell = KSI[(con[cell][0],
+                    con[cell][1],
+                    con[cell][2],
+                    con[cell][3],)]
 
-                current_curves = array([id_slv, id_mstr])
+                xi_lim_slv = array([KSI_Cell[:,0].min(), KSI_Cell[:,0].max()])
+                theta_lim_slv = array([KSI_Cell[:,1].min(), KSI_Cell[:,1].max()])
 
-                id_els = self.el_per_curves[current_curves,].ravel()
-                # get id of the master curve where the GQP is projected
-                xi_lim_slv = Tab.xi_lim[id_xi_slv]
-                theta_lim_slv = Tab.theta_lim[id_theta_slv]
+                for (kk,ll) in product(range(nxiGQP), range(nthetaGQP)):
 
-                xiGQP, WxiGQP= TransformationQuadraturePointsAndWeigths1D(\
-                         xi_lim_slv , nuxiGQP[id_xi_GQP], WnuxiGQP[id_xi_GQP])
-                thetaGQP, WthetaGQP = TransformationQuadraturePointsAndWeigths1D(\
-                         theta_lim_slv, nuthetaGQP[id_theta_GQP], WnuthetaGQP[id_theta_GQP])
-
-                hFG = Tab.h[tuple(index_GQP)]
-                # perform once the routine with the FG stored. In most cases, it will be ok. Othrewise,
-                # we will find a better FG and hope to find a better solution
-                if Tab.enforcement == 0 :
-                    value_in = Tab.kN[index_GQP]
-                elif Tab.enforcement == 1:
-                    value_in = Tab.LM[index_GQP[:3]]
-                    if Tab.LM_per_ctct_el == 1:
-                        assert isinstance(value_in, np.float64)
+                    index_GQP = tuple(ii,jj,kk,ll)
+                    # first guess for the id of the master curve on which the CPP will be found
+                    id_mstr = Tab.ID_master[index_GQP]
+                    if id_mstr < 0 :
+                        if id_mstr == -999:
+                            id_mstr = Tab.ID_master_Ctr[(ii,jj)]
                     else:
-                        assert len(value_in) == len(value_in)
+                        raise ValueError
 
+                    current_curves = array([id_slv, id_mstr])
+                    id_els = self.el_per_curves[current_curves,].ravel()
+                    xiGQP, WxiGQP= TransformationQuadraturePointsAndWeigths1D(\
+                             xi_lim_slv , nuxiGQP[id_xi_GQP], WnuxiGQP[id_xi_GQP])
+                    thetaGQP, WthetaGQP = TransformationQuadraturePointsAndWeigths1D(\
+                             theta_lim_slv, nuthetaGQP[id_theta_GQP], WnuthetaGQP[id_theta_GQP])
 
-                (hSol, fkk, Kkk, gN, ExitCode, Contri_sl)=\
-                    self.contri1GQP_Int2Int(\
-                    current_curves,\
-                    hFG,
-                    xiGQP,\
-                    WxiGQP,\
-                    thetaGQP,\
-                    WthetaGQP,\
-                    value_in)
+                    hFG = Tab.h[tuple(index_GQP)]
+                    if np.any(np.isnan(hFG)):
+                        hFG = Tab.hCtr[(ii,jj)]
 
-                xGQP = self.get_surf_point_smoothed_geo(id_els[(0,1),], array([ xiGQP,\
-                        thetaGQP]))
-
-                xFG= self.get_surf_point_smoothed_geo(id_els[(2,3),], np.asarray(hFG))
-                xSol = self.get_surf_point_smoothed_geo(id_els[(2,3),], np.asarray(hSol))
-                dFG = norm(xFG-xGQP)
-
-                if (not xi_lim_mstr[0] <= hSol[0]<= xi_lim_mstr[1]) \
-                        or (gN < Tab.critical_penetration) :
-                    xGQP = self.get_surf_point_smoothed_geo(id_els[(0,1),], array([ xiGQP,\
-                            thetaGQP]))
-                    nxi_sampled = 15
-                    ntheta_sampled = 20
-                    xi_mstr = np.linspace(xi_lim_mstr[0],\
-                            xi_lim_mstr[1],\
-                            nxi_sampled)
-                    theta_mstr = np.linspace(theta_lim_mstr[0],\
-                            theta_lim_mstr[1],\
-                            ntheta_sampled)
-                    # sample on master
-                    current_sampling_cloud =\
-                            self.sample_surf_point_on_smooth_geo(\
-                            id_els[(2,3),], nxi_sampled,\
-                            ntheta_sampled,\
-                            xi_lim_mstr,
-                            theta_lim_mstr)
-
-                    ct_change_proj = 0
-                    FG_found = 0
-                    while not FG_found:
-                        if ct_change_proj >= 5:
-                            set_trace()
-                        idx = np.unravel_index( norm((current_sampling_cloud - xGQP), axis =
-                            2).argmin(), (current_sampling_cloud.shape[:2]))
-                        hFG = array([xi_mstr[idx[0]], theta_mstr[idx[1]]])
-                        dFG = norm( self.get_surf_point_smoothed_geo(\
-                                id_els[(2,3),], hFG) - xGQP)
-                        if np.allclose(hFG[0], 0.):
-                            sampOnPrevCurveMaster=\
-                                    self.sample_surf_point_on_smooth_geo(\
-                                    self.el_per_curves[current_curves[1]-1], nxi_sampled,\
-                                    ntheta_sampled,\
-                                    xi_lim_mstr,
-                                    theta_lim_mstr)
-
-                            idx = np.unravel_index( norm(( sampOnPrevCurveMaster- xGQP), axis =
-                                2).argmin(), (sampOnPrevCurveMaster.shape[:2]))
-                            hFG_prev = array([xi_mstr[idx[0]], theta_mstr[idx[1]]])
-                            dFG_prev = norm( self.get_surf_point_smoothed_geo(\
-                                    self.el_per_curves[current_curves[1]-1],\
-                                    hFG_prev) - xGQP)
-                            if dFG_prev < dFG:
-                                current_curves[1] -= 1
-                                id_els =\
-                                    self.el_per_curves[current_curves,].ravel()
-                                hFG[:] = hFG_prev
-                                current_sampling_cloud = np.copy(sampOnPrevCurveMaster)
-                                ct_change_proj += 1
-                            else:
-                                FG_found = True
-
-                        elif np.allclose(hFG[0], 1.):
-                            sampOnNextCurveMaster=\
-                                    self.sample_surf_point_on_smooth_geo(\
-                                    self.el_per_curves[current_curves[1]+1], nxi_sampled,\
-                                    ntheta_sampled,\
-                                    xi_lim_mstr,
-                                    theta_lim_mstr)
-
-                            idx = np.unravel_index( norm(( sampOnNextCurveMaster- xGQP), axis =
-                                2).argmin(), (sampOnNextCurveMaster.shape[:2]))
-                            hFG_next = array([xi_mstr[idx[0]], theta_mstr[idx[1]]])
-                            dFG_next = norm( self.get_surf_point_smoothed_geo(\
-                                    self.el_per_curves[current_curves[1]+1],\
-                                    hFG_next) - xGQP)
-                            if dFG_next < dFG:
-                                current_curves[1] += 1
-                                id_els =\
-                                    self.el_per_curves[current_curves,].ravel()
-                                hFG[:] = hFG_next
-                                current_sampling_cloud = np.copy(sampOnNextCurveMaster)
-                                ct_change_proj += 1
-                            else:
-                                FG_found = True
+                    if Tab.enforcement == 0 :
+                        value_in = Tab.kN[index_GQP]
+                    elif Tab.enforcement == 1:
+                        value_in = Tab.LM[index_GQP[:3]]
+                        if Tab.LM_per_ctct_el == 1:
+                            assert isinstance(value_in, np.float64)
                         else:
-                            FG_found = True
+                            assert len(value_in) == len(value_in)
 
                     (hSol, fkk, Kkk, gN, ExitCode, Contri_sl)=\
                         self.contri1GQP_Int2Int(\
@@ -2702,49 +2610,139 @@ class Model():
                         thetaGQP,\
                         WthetaGQP,\
                         value_in)
-                    assert ExitCode == 1
-                    # the projection is valid
-                    # because inthe roght master
-                    # interval
-                    if gN < Tab.critical_penetration:
-                        # the problem might be to a FG that leads to
-                        # the local schme to converge in an unexpected
-                        # manner for example on the other side of the
-                        # slave curve
 
+                    xGQP = self.get_surf_point_smoothed_geo(id_els[(0,1),], array([ xiGQP,\
+                            thetaGQP]))
+
+                    if (not xi_lim_mstr[0] <= hSol[0]<= xi_lim_mstr[1]) \
+                            or (gN < Tab.critical_penetration) :
+                        raise DeprecationWarning
+                        xGQP = self.get_surf_point_smoothed_geo(id_els[(0,1),], array([ xiGQP,\
+                                thetaGQP]))
+                        nxi_sampled = 15
+                        ntheta_sampled = 20
+                        xi_mstr = np.linspace(xi_lim_mstr[0],\
+                                xi_lim_mstr[1],\
+                                nxi_sampled)
+                        theta_mstr = np.linspace(theta_lim_mstr[0],\
+                                theta_lim_mstr[1],\
+                                ntheta_sampled)
+                        # sample on master
+                        current_sampling_cloud =\
+                                self.sample_surf_point_on_smooth_geo(\
+                                id_els[(2,3),], nxi_sampled,\
+                                ntheta_sampled,\
+                                xi_lim_mstr,
+                                theta_lim_mstr)
+
+                        ct_change_proj = 0
+                        FG_found = 0
+                        while not FG_found:
+                            if ct_change_proj >= 5:
+                                set_trace()
+                            idx = np.unravel_index( norm((current_sampling_cloud - xGQP), axis =
+                                2).argmin(), (current_sampling_cloud.shape[:2]))
+                            hFG = array([xi_mstr[idx[0]], theta_mstr[idx[1]]])
+                            dFG = norm( self.get_surf_point_smoothed_geo(\
+                                    id_els[(2,3),], hFG) - xGQP)
+                            if np.allclose(hFG[0], 0.):
+                                sampOnPrevCurveMaster=\
+                                        self.sample_surf_point_on_smooth_geo(\
+                                        self.el_per_curves[current_curves[1]-1], nxi_sampled,\
+                                        ntheta_sampled,\
+                                        xi_lim_mstr,
+                                        theta_lim_mstr)
+
+                                idx = np.unravel_index( norm(( sampOnPrevCurveMaster- xGQP), axis =
+                                    2).argmin(), (sampOnPrevCurveMaster.shape[:2]))
+                                hFG_prev = array([xi_mstr[idx[0]], theta_mstr[idx[1]]])
+                                dFG_prev = norm( self.get_surf_point_smoothed_geo(\
+                                        self.el_per_curves[current_curves[1]-1],\
+                                        hFG_prev) - xGQP)
+                                if dFG_prev < dFG:
+                                    current_curves[1] -= 1
+                                    id_els =\
+                                        self.el_per_curves[current_curves,].ravel()
+                                    hFG[:] = hFG_prev
+                                    current_sampling_cloud = np.copy(sampOnPrevCurveMaster)
+                                    ct_change_proj += 1
+                                else:
+                                    FG_found = True
+
+                            elif np.allclose(hFG[0], 1.):
+                                sampOnNextCurveMaster=\
+                                        self.sample_surf_point_on_smooth_geo(\
+                                        self.el_per_curves[current_curves[1]+1], nxi_sampled,\
+                                        ntheta_sampled,\
+                                        xi_lim_mstr,
+                                        theta_lim_mstr)
+
+                                idx = np.unravel_index( norm(( sampOnNextCurveMaster- xGQP), axis =
+                                    2).argmin(), (sampOnNextCurveMaster.shape[:2]))
+                                hFG_next = array([xi_mstr[idx[0]], theta_mstr[idx[1]]])
+                                dFG_next = norm( self.get_surf_point_smoothed_geo(\
+                                        self.el_per_curves[current_curves[1]+1],\
+                                        hFG_next) - xGQP)
+                                if dFG_next < dFG:
+                                    current_curves[1] += 1
+                                    id_els =\
+                                        self.el_per_curves[current_curves,].ravel()
+                                    hFG[:] = hFG_next
+                                    current_sampling_cloud = np.copy(sampOnNextCurveMaster)
+                                    ct_change_proj += 1
+                                else:
+                                    FG_found = True
+                            else:
+                                FG_found = True
+
+                        (hSol, fkk, Kkk, gN, ExitCode, Contri_sl)=\
+                            self.contri1GQP_Int2Int(\
+                            current_curves,\
+                            hFG,
+                            xiGQP,\
+                            WxiGQP,\
+                            thetaGQP,\
+                            WthetaGQP,\
+                            value_in)
+                        assert ExitCode == 1
+                        # the projection is valid
+                        # because inthe roght master
+                        # interval
                         if gN < Tab.critical_penetration:
-                            raise MaximumPenetrationError
+                            # the problem might be to a FG that leads to
+                            # the local schme to converge in an unexpected
+                            # manner for example on the other side of the
+                            # slave curve
+                            xFG= self.get_surf_point_smoothed_geo(id_els[(2,3),], np.asarray(hFG))
+                            xSol = self.get_surf_point_smoothed_geo(id_els[(2,3),], np.asarray(hSol))
+
+                            if gN < Tab.critical_penetration:
+                                raise MaximumPenetrationError
 
 
-                """
-                if gN <0:
-                    dSol = norm(xFG-xSol)
-                    assert dSol < dFG
-                """
+                    Tab.ID_master[tuple(index_GQP)] = current_curves[1]
+                    Tab.gN[tuple(index_GQP)] = gN
+                    Tab.h[tuple(index_GQP)] = hSol
 
-                Tab.master_ID_forCPP[tuple(index_GQP)] =\
-                current_curves[1]
-                Tab.gN[tuple(index_GQP)] = gN
-                Tab.h[tuple(index_GQP)] = hSol
-                # nodes used for the first curve
-                nd_C1 =  self.nPerEl[id_els[(0,1),]].flatten()[(0,1,3),]
-                nd_C2 =  self.nPerEl[id_els[(2,3),]].flatten()[(0,1,3),]
-                if Tab.enforcement == 0:
-                    dofs_ctc_el = np.concatenate((self.dperN[nd_C1,],self.dperN[nd_C2,])).ravel()
-                elif Tab.enforcement == 1:
-                    # add the potential coming from the quadrature point
-                    Tab.weak_enforcement[index_GQP[:3]]+=Contri_sl
-                    dofs_LM = Tab.dofs_LM[index_GQP[:3]]
-                    assert dofs_LM != -999
-                    dofs_ctc_el = np.hstack((self.dperN[nd_C1,].ravel(),
-                        self.dperN[nd_C2,].ravel(), [dofs_LM]))
+                    # nodes used for the first curve
+                    nd_C1 =  self.nPerEl[id_els[(0,1),]].flatten()[(0,1,3),]
+                    nd_C2 =  self.nPerEl[id_els[(2,3),]].flatten()[(0,1,3),]
+                    if Tab.enforcement == 0:
+                        dofs_ctc_el = np.concatenate((self.dperN[nd_C1,],self.dperN[nd_C2,])).ravel()
+                    elif Tab.enforcement == 1:
+                        # add the potential coming from the quadrature point
+                        Tab.weak_enforcement[index_GQP[:3]]+=Contri_sl
+                        dofs_LM = Tab.dofs_LM[index_GQP[:3]]
+                        assert dofs_LM != -999
+                        dofs_ctc_el = np.hstack((self.dperN[nd_C1,].ravel(),
+                            self.dperN[nd_C2,].ravel(), [dofs_LM]))
 
-                if self.debug_mode:
-                    assert not np.any(np.isnan(fkk))
-                    assert not np.any(np.isnan(Kkk))
-                    assert np.allclose(array(Kkk), array(Kkk).T)
-                fint[dofs_ctc_el] += array(fkk)
-                K[ix_(dofs_ctc_el, dofs_ctc_el)] += array(Kkk)
+                    if self.debug_mode:
+                        assert not np.any(np.isnan(fkk))
+                        assert not np.any(np.isnan(Kkk))
+                        assert np.allclose(array(Kkk), array(Kkk).T)
+                    fint[dofs_ctc_el] += array(fkk)
+                    K[ix_(dofs_ctc_el, dofs_ctc_el)] += array(Kkk)
 
 
 
