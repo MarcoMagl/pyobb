@@ -9,6 +9,7 @@ from pyquaternion import Quaternion
 from mayavi import mlab
 import cProfile, pstats
 from interval import Interval
+import itertools
 
 
 #------------------------------------------------------------------------------
@@ -293,7 +294,7 @@ def get_linear_transfo_between_tgt_spaces_of_SO3(Psi) :
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def collision_bounding_boxes(blim1, blim2):
+def collision_AABB(blim1, blim2, eps = 0):
     """
     Check Collision of 2 Bounding Boxes
     #  ________
@@ -320,14 +321,25 @@ def collision_bounding_boxes(blim1, blim2):
             color = (0.,1.,0.), scale_factor = 0.1)
     """
     # www.miguelcasillas.com/?p=30
-
-    eps = 1e-6
     return (xmax_1 >= xmin_2 - eps) and\
             (xmin_1 <= xmax_2 + eps) and\
             (ymax_1 >= ymin_2 -eps) and\
             (ymin_1 <= ymax_2+eps) and\
             (zmax_1 >= zmin_2-eps) and\
             (zmin_1 <= zmax_2+eps)
+
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def plot_AABB(blim):
+   assert blim.shape== (2,3)
+   coord = np.array([ci for ci in itertools.product(blim[:,0], blim[:,1], blim[:,2]) ])
+   mlab.points3d(coord[:, 0],
+           coord[:,1],
+           coord[:, 2],
+        color = (0.,1.,0.),
+        scale_factor = 0.02)
 
 
 #------------------------------------------------------------------------------
@@ -340,6 +352,9 @@ def is_point_in_AABB(blim, Pt):
     (zmin <= Pt[2] <= zmax)
 
 
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
 def get_surface_points_sphere(r,c):
     assert c.shape==(3,)
     assert isinstance(r, float)
@@ -462,9 +477,10 @@ def overlaps(int1, int2):
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def collision_btw_obb(obb0_obj, obb1_obj):
+def collision_btw_obb(obb0_obj, obb1_obj, eps = 0 ):
     # determine the normals of all the facets of the obb
     # order the vertices of the 3D geometry
+    assert eps >= 0
     obb0 = np.concatenate(obb0_obj.points).reshape(-1,3)
     obb1 = np.concatenate(obb1_obj.points).reshape(-1,3)
     assert obb0.shape == (8,3)
@@ -499,15 +515,14 @@ def collision_btw_obb(obb0_obj, obb1_obj):
 
     n = np.vstack((n_0, n_1))
 
-
-
     # test projection along all the directions of the normal to the facets
     for ii, nii  in enumerate(n):
         # project all the vertices of the first obb
         p0 = np.dot(obb0, nii)
         p1 = np.dot(obb1, nii)
         # check if interval of projection overlap
-        if not overlaps([np.min(p0), np.max(p0)] , [np.min(p1), np.max(p1)]):
+        # this is where we take into account a possible error
+        if not overlaps([np.min(p0)-eps , np.max(p0) + eps] , [np.min(p1) - eps, np.max(p1) + eps]):
             # use SAT theorem: if we found a direction and an axis of porjection where
             # the intervals are not overlapping, it means the 2 convex hull are not colliding
             return False

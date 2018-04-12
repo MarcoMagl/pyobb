@@ -306,7 +306,7 @@ class ContactTable():
         for ii in range( len(self.gN)):
             ToIncr = np.argwhere(self.gN[ii] < maxPenAllow)
             if ToIncr.shape[0] > 0:
-                #print('Some increase penalty stiff')
+                print('Some increase penalty stiff')
                 if Method == 0:
                     # multiply the stiffness in a naive manner
                     assert mul > 0
@@ -317,12 +317,7 @@ class ContactTable():
                         # there is only one kN per pair of curves but
                         # several GQP and possible several integration
                         # intervals
-                        """
-                        wrong because we end up with a mutliplier smaller
-                        than 1
-                        self.kN[ToIncr] *= (mul / ( self.nxiGQP *\
-                                self.nthetaGQP))
-                        self.kN[ToIncr[:3]] *= mul
+                        self.kN[ii] *= mul
                         """
                         pen_adjusted = 0
                         # a slave curve can be in contact only once. This allows an efficient
@@ -334,8 +329,8 @@ class ContactTable():
                                 self.kN[tuple(index)] *= ( 1 + mul/(self.nxiGQP * self.nthetaGQP))
                                 pen_adjusted += 1
                                 IsCorrectPenStiff = False
-
                         print('stiff of %d elements adjusted'%(pen_adjusted))
+                        """
 
                     else:
                         raise NotImplementedError

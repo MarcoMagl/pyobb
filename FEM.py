@@ -116,6 +116,7 @@ class Model():
                 Yct += 1
                 el_per_Y.append([ii])
         self.el_per_Y = el_per_Y
+        self.nY = Yct + 1
 
         self.debug_mode = False
 
@@ -312,6 +313,55 @@ class Model():
 -           self.slave_curves_ids, self.master_curves_ids, \
             self.nmaster_curves, self.nslave_curves)
 
+
+        # which curve belongs to which yarn
+        self.curve_in_yarn = np.zeros(self.nCurves, dtype = int)
+        Yi = 0
+        for ii in range(self.nCurves-1):
+            el0, el1 = self.el_per_curves[ii]
+            el2, el3 = self.el_per_curves[ii + 1]
+            self.curve_in_yarn[ii] = Yi
+            if el1 != el2:
+                Yi += 1
+        # last curve
+        el0, el1 = self.el_per_curves[-2]
+        el2, el3 = self.el_per_curves[-1]
+        if el1 == el2:
+            self.curve_in_yarn[-1] = Yi
+        else:
+            self.curve_in_yarn[-1] = Yi + 1
+
+        # initial check to ensure that we start from a C1 surface
+        self.CheckContinuitySurface()
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def CheckContinuitySurface(self,):
+        # check the continuity of the surface yarn per yarn
+        try:
+            theta = 2 * np.pi * np.random.rand(1)
+            for Y in range(self.nY):
+                c_in_Y = np.argwhere(self.curve_in_yarn == Y).ravel()
+                for ci in c_in_Y[:-1]:
+                    id_c0 = ci
+                    id_c1 = ci + 1
+                    s0, sxi0, stheta0, n0 = self.SurfPtAndVects_smoothed(id_c0, array([1., theta]))
+                    s1, sxi1, stheta1, n1 = self.SurfPtAndVects_smoothed(id_c1, array([0., theta]))
+                    assert np.allclose( array(s0), array(s1))
+                    assert np.allclose( array(sxi0), array(sxi1))
+                    assert np.allclose( array(stheta0), array(stheta1))
+                    assert np.allclose( array(n0), array(n1))
+        except AssertionError:
+            raise ValueError('Some discontinuity in the smoothed surface have been spotted for the\
+                    initialconfig')
+        else:
+            print('\n')
+            print('TEST SMOOTHNESS SURFACE PASSED')
+            print('\n')
+
+
+
     ################################################################################
                             # SETTERS
     ################################################################################
@@ -408,7 +458,7 @@ class Model():
                     bYMii = self.box_lim[ii]
                     bYSjj = self.box_lim[jj]
                     Tab.close_curves[ii, jj] =\
-                    collision_bounding_boxes(bYMii, bYSjj)
+                    collision_AABB(bYMii, bYSjj, eps = 0.05 * self.r_sphbox[i] )
 
 
 
@@ -544,7 +594,6 @@ class Model():
                     scale_factor = 0.01, name = 'pos GQP')
 
 
-
         Tab = self.ContactTable
         # arrays created just to validate cython implementation
         nxiGQP = Tab.nxiGQP
@@ -572,7 +621,14 @@ class Model():
             is_active_slave = Tab.query_is_active_slave(slave)
             nmclose = len(master_close[0])
             if is_active_slave and nmclose == 0:
+                self.plot_integration_interval(
+                        self.el_per_curves[slave],
+                        array([0, 1.]),
+                        array([0, 2 * np.pi]),
+                        opacity = 1., color = (0.,0.,0.) )
+                plot_AABB(self.box_lim[slave])
                 raise ValueError('complete loss of contact not allowed')
+
             if not is_active_slave and nmclose >0:
                 assert np.array_equal(np.unique(master_close), np.array(master_close).ravel())
                 # construct slave obb
@@ -590,12 +646,12 @@ class Model():
                         zeros( (len(master_close[0]), nxi_sampled , ntheta_sampled,
                     3), dtype = np.float)
                 obb_master = []
-                for uu, id_m, in enumerate(master_close[0]):
-                    id_els_m = self.el_per_curves[(id_m),].ravel()
 
+                for uu, id_m, in enumerate(master_close[0]):
                     samp_on_master_candi[uu]=\
                         self.sample_surf_point_on_smooth_geo(\
-                            id_els_m, nxi_sampled,\
+                            self.el_per_curves[(id_m),].ravel(),
+                            nxi_sampled,\
                             ntheta_sampled,\
                             xi_lim_mstr,\
                             theta_lim_mstr)
@@ -605,7 +661,7 @@ class Model():
                 # master one ?
                 collision_obb = False
                 for obb_m in obb_master:
-                    if collision_btw_obb(obb_m, obb_slave):
+                    if collision_btw_obb(obb_m, obb_slave, eps = 0.01 * norm(obb_m.extents)):
                         collision_obb = True
                 if not collision_obb :
                     #TODO assert slave is not active if there is no collision
@@ -647,8 +703,8 @@ class Model():
                             np.max(has_int_theta_lim[:,1] , axis = 0)] ).ravel()
 
                     # TODO: must be generalized
-                    nxi = Tab.nxiGQP
-                    ntheta = Tab.nthetaGQP
+                    nxi = int(Tab.nxiGQP)
+                    ntheta = int(Tab.nthetaGQP)
                     # cut the interval in unit cell
                     KSI, con = generation_grid_quadri_and_connectivity(
                             xi_lim_slv, theta_lim_slv, nxi, ntheta)
@@ -773,7 +829,6 @@ class Model():
                                 to_activate.append(slave)
                                 # store the results of the contact detection
                     elif Tab.enforcement == 0:
-
                         # select all the cells where the gap is small enough as part of
                         # the integration domain
                         active_cells = np.argwhere(gNSol <  Tab.epsilon).flatten()
@@ -1068,6 +1123,81 @@ class Model():
                 f.scene.camera.view_up = self.camera_settings['view_up']
                 f.scene.camera.clipping_range = self.camera_settings['clipping_range']
             f.scene.disable_render = False
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def plot_all_QP_and_FG(self):
+        Tab = self.ContactTable
+        nxiGQP = Tab.nxiGQP
+        nthetaGQP= Tab.nthetaGQP
+        nuxiGQP, WnuxiGQP =  np.polynomial.legendre.leggauss(nxiGQP)
+        nuthetaGQP, WnuthetaGQP =\
+        np.polynomial.legendre.leggauss(nthetaGQP)
+
+        # for the time being the master has always the same limit
+        xi_lim_mstr = array([0,1])
+        theta_lim_mstr = array([0, 2 * np.pi])
+        tol_for_err = 0.1
+
+        tot_active_cells = sum( ([len(Tab.active_cells[i]) for i in range(len(Tab.active_set))]))
+        xGQP_arr = zeros((len(Tab.active_set) * tot_active_cells * nxiGQP * nthetaGQP, 3 ), dtype= float)
+        xFG_arr = zeros(xGQP_arr.shape, dtype= float)
+
+        ct = 0
+        for ii, id_slv in enumerate(Tab.active_set):
+            con = Tab.CON_Cells[ii]
+            KSI = Tab.KSI_Cells[ii]
+            for jj, cell in enumerate(Tab.active_cells[ii]):
+                # get the limit of the cell
+                KSI_Cell = KSI[(con[cell][0],
+                    con[cell][1],
+                    con[cell][2],
+                    con[cell][3]),]
+
+                xi_lim_slv = array([KSI_Cell[:,0].min(), KSI_Cell[:,0].max()])
+                theta_lim_slv = array([KSI_Cell[:,1].min(), KSI_Cell[:,1].max()])
+
+                for (kk,ll) in product(range(nxiGQP), range(nthetaGQP)):
+
+                    # first guess for the id of the master curve on which the CPP will be found
+                    id_mstr = Tab.ID_master[ii][jj][kk,ll]
+                    if id_mstr < 0 :
+                        if id_mstr == -999:
+                            id_mstr = Tab.ID_master_Ctr[ii][jj]
+                        else:
+                            raise ValueError
+
+                    current_curves = array([id_slv, id_mstr])
+                    xiGQP, WxiGQP= TransformationQuadraturePointsAndWeigths1D(\
+                             xi_lim_slv , nuxiGQP[kk], WnuxiGQP[kk])
+                    thetaGQP, WthetaGQP = TransformationQuadraturePointsAndWeigths1D(\
+                             theta_lim_slv, nuthetaGQP[ll], WnuthetaGQP[ll])
+
+                    hFG = Tab.h[ii][jj, kk, ll][:2]
+                    if np.any(np.isnan(hFG)):
+                        assert np.all(np.isnan(hFG))
+                        hFG = Tab.hCtr[ii][jj]
+
+                    id_els = self.el_per_curves[current_curves,].ravel()
+                    xGQP_arr[ct] = self.get_surf_point_smoothed_geo(id_els[(0,1),], array([ xiGQP,\
+                            thetaGQP]))
+                    xFG_arr[ct] = self.get_surf_point_smoothed_geo(id_els[(2,3),], np.asarray(hFG))
+                    ct += 1
+
+        self.plot(opacity = 0.2, diff_color_each_element = False)
+
+        for i in range( xFG_arr.shape[0]):
+            mlab.plot3d([xGQP_arr[i,0], xFG_arr[i,0]],
+                    [xGQP_arr[i,1], xFG_arr[i, 1]],
+                     [xGQP_arr[i,2], xFG_arr[i, 2]], color = (1.,0.,0.),
+                     tube_radius = None )
+
+        set_trace()
+
+
+
 
 
     #------------------------------------------------------------------------------
@@ -1460,34 +1590,31 @@ class Model():
             def animation():
                 sc = mlab.gcf()
                 cycle_ct = 0
-                t = tmin
-                n = 0
-                while t < tmax:
-                    # Read data timestep
-                    if n >=nstp - 1:
-                        print('END')
-                        # force the generator to quit
-                        raise ValueError
-                    t = self.Load_Config_at_TS(path, n)
-                    if Wttitle:
-                        mlab.title('t = ' + str("%.3f " % (t)))
-                    print(n)
-                    # the rendering management is taken care of inside
-                    self.plot(useYarnConnectivity = useYarnConnectivity,
-                                diff_color_each_element = diff_color_each_element,\
-                                color=color,\
-                                opacity = opacity, \
-                                nS = nS,\
-                                ntheta = ntheta)
+                while cycle_ct <= ncycles:
+                    t = tmin
+                    n = 0
+                    while t < tmax:
+                        # Read data timestep
+                        if n >=nstp - 1:
+                            print('END')
+                            # force the generator to quit
+                            break
+                        t = self.Load_Config_at_TS(path, n)
+                        if Wttitle:
+                            mlab.title('t = ' + str("%.3f " % (t)))
+                        print(n)
+                        # the rendering management is taken care of inside
+                        self.plot(useYarnConnectivity = useYarnConnectivity,
+                                    diff_color_each_element = diff_color_each_element,\
+                                    color=color,\
+                                    opacity = opacity, \
+                                    nS = nS,\
+                                    ntheta = ntheta)
 
-                    n += plotevery
-                    yield
+                        n += plotevery
+                        yield
 
-            try:
-                animation()
-            except ValueError:
-                pass
-            set_trace()
+            animation()
             #mlab.show()
 
         # make movie from png
@@ -1567,9 +1694,6 @@ class Model():
         animation.write_videofile(title_movie + ".mp4", codec = 'mpeg4', fps=10, threads = 4) # export as video
         animation = mpy.VideoClip(make_frame, duration=duration)
         animation.write_gif("sinc.gif", fps=20)
-
-
-
 
 
     #------------------------------------------------------------------------------
@@ -1730,12 +1854,6 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def getx0s(self, xis=[], nPts = 0):
-        return np.asarray([eli.getx0s(xis, nPts) for eli in self.el]).reshape(-1,3)
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
     def get_surf_point_smoothed_geo(self, id_els, h):
         b1,b2 = self.el[id_els,]
         nd_C = asarray([b1.nID[0], b1.nID[1], b2.nID[1]]).ravel()
@@ -1748,6 +1866,25 @@ class Model():
                             b1.a , b1.b ,\
                             self.ContactTable.alpha,\
                             h) )
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def SurfPtAndVects_smoothed(self, id_c, h):
+        id_els = self.el_per_curves[id_c]
+        b1,b2 = self.el[id_els,]
+        nd_C = asarray([b1.nID[0], b1.nID[1], b2.nID[1]]).ravel()
+        #return s, sxi, stheta, n
+        return GeoSmooth.SurfAndVects(\
+                            self.X[nd_C,].ravel(),\
+                            self.u[nd_C,].ravel(),\
+                            self.v[nd_C,].ravel(),\
+                            np.array([b1.E1, b2.E1]),\
+                            np.array([b1.E2, b2.E2]),\
+                            b1.a , b1.b ,\
+                            self.ContactTable.alpha,\
+                            h)
+
 
     #------------------------------------------------------------------------------
     #
@@ -1776,6 +1913,8 @@ class Model():
         return pos
 
     #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
     def sample_point_centroid(self,\
             id_els, nS,\
             xi_lim):
@@ -1803,83 +1942,6 @@ class Model():
         return 0
 
 
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def get_x_contact(self, ii):
-        assert self.HasConstraints
-        assert self.is_set_ContactTable
-        Tab = self.ContactTable
-        nCtc_el = self.ContactTable.h.shape[0]
-        x_ctc = zeros((nCtc_el, 2, 3), dtype = np.float)
-
-        for ii in range(nCtc_el):
-            h = Tab.h[ii]
-            beam1 = self.el[Tab.id_els[ii,0]]
-            beam2 = self.el[Tab.id_els[ii,1]]
-            x_ctc[ii, 0] = beam1.get_x_surf(self.X[beam1.nID],
-                             self.u[beam1.nID],
-                             self.v[beam1.nID], h[0],h[1],
-                             get_vec = 0 )
-
-            x_ctc[ii, 1] = beam2.get_x_surf(self.X[beam2.nID],
-                             self.u[beam2.nID],
-                             self.v[beam2.nID], h[2],h[3],
-                             get_vec = 0 )
-            return x_ctc
-
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def get_phi_smoothed(self, id_ctc_el, id_curve, xi):
-        Tab = self.ContactTable
-        assert id_curve == 0 or id_curve == 1
-        assert 0 <= xi <= 1
-        el1_ID, el2_ID = Tab.id_els[id_ctc_el][id_curve]
-        b1,b2= self.el[(el1_ID,el2_ID),]
-        # nodes used for the first curve
-        nd_C = asarray([b1.nID[0], b1.nID[1], b2.nID[1]]).ravel()
-        # number of nodes per beam element
-        Phi =\
-        asarray(SmoothingWtSmoothedVect.CentroidPoint(self.X[nd_C,].ravel(),\
-        self.u[nd_C,].ravel(), xi, Tab.alpha))
-        assert not np.any(np.isnan(Phi))
-        return Phi
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def get_x_and_tangent_smoothed_surface(self, el1_ID, el2_ID, xi, theta):
-        assert el1_ID == el2_ID - 1, "the ID of the elements must\
-        follow each other"
-        X = self.X[(el1_ID, el2_ID,)].ravel()
-        u = self.u[(el1_ID, el2_ID,)].ravel()
-        v = self.u[(el1_ID, el2_ID,)].ravel()
-        t1 = self.el[el1_ID].E1
-        assert self.ContactTable.smoothing == True
-        assert self.ContactTable.smoothing_type == 'splines'
-        # spline parameter
-        alpha = self.ContactTable.alpha
-        assert -1 <= alpha <= 1
-        assert allclose(t1, self.el[el2_ID].E1), "cross section\
-        vector\
-        of els of same yarn must be the same"
-        t2 = self.el[el1_ID].E2
-        assert allclose(t2, self.el[el2_ID].E2),"cross section\
-        vector\
-        of els of same yarn must be the same"
-        assert allclose(self.el[el1_ID].a, self.el[el2_ID].a),"cross section\
-        dimension\
-        of els of same yarn must be the same"
-        assert allclose(self.el[el1_ID].b, self.el[el2_ID].b),"cross section\
-        dimension\
-        of els of same yarn must be the same"
-        assert 0 <= alpha <= 1
-
-        s, sxi, stheta = AceGenGEB.PointAndTgtSmoothedSurface2Nodes(X,u,v,t1, t2, a, b,
-                alpha, array([xi, theta], astype=np.double))
-        return asarray(s), asarray(sxi), asarray(stheta)
 
 
     ################################################################################
@@ -2236,56 +2298,6 @@ class Model():
                     Tab.alpha)
         return cdist(Phi1, Phi2, metric='euclidean').argmin()
 
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def narrow_phase_curve_to_curve(self, id_curves):
-        Tab = self.ContactTable
-        assert id_curves.shape == (2,)
-        id_els = self.el_per_curves[id_curves,].ravel()
-        assert id_els.shape == (4,)
-        b1,b2, b3,b4 = self.el[id_els.ravel()]
-        # nodes used for the first curve
-        nd_C1 = asarray([b1.nID[0], b1.nID[1], b2.nID[1]]).ravel()
-        nd_C2 = asarray([b3.nID[0], b3.nID[1], b4.nID[1]]).ravel()
-        # number of nodes per beam element
-        nN = b1.nID.shape[0]
-        Xi = array([self.X[nd_C1,].ravel(), self.X[nd_C2,].ravel()])
-        ui = array([self.u[nd_C1,].ravel(), self.u[nd_C2,].ravel()])
-        v_Ii = array([self.v[nd_C1,].ravel(), self.v[nd_C2,].ravel()])
-        a = np.ascontiguousarray([b1.a, b3.a])
-        b = np.ascontiguousarray([b1.b, b3.b])
-        # we will interpolate the cross section vector at the
-        # junction between the 2 beams of the same yarns
-        t1 = np.ascontiguousarray(np.array([b1.E1, b2.E1, b3.E1,
-            b4.E1]).astype(np.double))
-        t2 = np.ascontiguousarray(np.array([b1.E2, b2.E2, b3.E2,
-            b4.E2]).astype(np.double))
-        assert t1.shape == (4,3) and t2.shape == (4,3)
-        assert b1.a == b2.a
-        assert b3.a == b4.a
-        assert b1.b == b2.b
-        assert b3.b == b4.b
-        if not Tab.smooth_cross_section_vectors:
-            try:
-                assert allclose(b1.E1,b2.E1)
-                assert allclose(b1.E2,b2.E2)
-                assert allclose(b3.E1,b4.E1)
-                assert allclose(b3.E2,b4.E2)
-            except AssertionError:
-                raise AssertionError('works only for yarn that have\
-                        beams with the same cross section vector and\
-                        dimensions in the ')
-
-        # get a FG or enhance the one give if needed
-        h = self.getFG_ctc_at_CPP(id_curves)
-
-        # returnm in the order: h, gN, and  ExitCode
-        return GeoSmooth.detemine_closest_pair(
-                    Xi,\
-                    ui, v_Ii, t1,\
-                    t2, a ,b , h, Tab.alpha)
-
 
     #------------------------------------------------------------------------------
     #
@@ -2469,7 +2481,7 @@ class Model():
         # for the time being the master has always the same limit
         xi_lim_mstr = array([0,1])
         theta_lim_mstr = array([0, 2 * np.pi])
-
+        tol_for_err = 0.1
 
         for ii, id_slv in enumerate(Tab.active_set):
             con = Tab.CON_Cells[ii]
@@ -2521,6 +2533,7 @@ class Model():
                     ct_corrections = 0
                     max_corr = 5
                     # must always be up to date before computing contrubution
+
                     id_els = self.el_per_curves[current_curves,].ravel()
                     while not sol_correct:
                         (hSol, fkk, Kkk, gN, ExitCode, Contri_sl)=\
@@ -2533,14 +2546,35 @@ class Model():
                             WthetaGQP,\
                             value_in)
 
-                        if xi_lim_mstr[0] <= hSol[0]<= xi_lim_mstr[1] \
+                        if xi_lim_mstr[0] - 1e-10 <= hSol[0]<= xi_lim_mstr[1] + 1e-10 \
                                 and gN > Tab.critical_penetration:
                             sol_correct = 1
                         else:
+                            try:
+                                assert xi_lim_mstr[0]-tol_for_err <= hSol[0]<= xi_lim_mstr[1] + tol_for_err
+                            except AssertionError:
+                                set_trace()
+
+                            if gN < Tab.critical_penetration:
+                                ExitCode = 3
+                                self.plot_all_QP_and_FG()
+                                set_trace()
+                                break
+
                             ct_corrections += 1
                             if ct_corrections > max_corr:
-                                raise ValueError
+                                ExitCode = 3
+                                set_trace()
+                                #break
+                            if xi_lim_mstr[0] < 0:
+                                current_curves[1] -=1
+                            elif xi_lim_mstr[0] > 1:
+                                current_curves[1] +=1
 
+                            id_els = self.el_per_curves[current_curves,].ravel()
+
+
+                            """
                             id_els = self.el_per_curves[current_curves,].ravel()
                             xGQP = self.get_surf_point_smoothed_geo(id_els[(0,1),], array([ xiGQP,\
                                     thetaGQP]))
@@ -2595,21 +2629,18 @@ class Model():
                                         self.el_per_curves[current_curves,].ravel()
                                     hFG[:] = hFG_other
                                     #current_sampling_cloud = np.array(otherSample)
-
-
+                            """
                     try:
                         assert ExitCode == 1
                     except AssertionError:
-                        # the problem might be to a FG that leads to
-                        # the local schme to converge in an unexpected
-                        # manner for example on the other side of the
-                        # slave curve
+                        if ExitCode == 3:
+                            print('Could not find a projection')
                         xGQP = self.get_surf_point_smoothed_geo(id_els[(0,1),], array([ xiGQP,\
                                 thetaGQP]))
                         xFG= self.get_surf_point_smoothed_geo(id_els[(2,3),], np.asarray(hFG))
                         xSol = self.get_surf_point_smoothed_geo(id_els[(2,3),], np.asarray(hSol))
 
-                        self.plot(opacity = 0.1,
+                        self.plot(opacity = 0.2,
                                 diff_color_each_element = False)
                         mlab.plot3d([xGQP[0], xFG[0]],
                                 [xGQP[1], xFG[1]],
@@ -2620,6 +2651,18 @@ class Model():
                                  [xGQP[2], xSol[2]],
                                  color = (1.,1.,0.),
                                  tube_radius = None)
+
+                        self.plot_integration_interval(id_els[(0,1),],\
+                                xi_lim_slv,
+                                theta_lim_slv,
+                                opacity = 0.9, color = (0.,0.,0.) )
+
+                        self.plot_integration_interval(id_els[(2,3),],\
+                                xi_lim_mstr,
+                                theta_lim_mstr,
+                                opacity = 0.9,
+                                color = (0., 1.,1.))
+
                         raise MaximumPenetrationError
 
 
