@@ -16,6 +16,7 @@ import matplotlib.pylab as plt
 from pyquaternion import Quaternion
 import time
 from mayavi import mlab
+import pickle
 
 
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -100,8 +101,14 @@ class Solver():
                         (ndofs)) + '.h5'
 
         self.pathfile = './Results/' + filename
+        if self.FEM.HasConstraints:
+            self.pathfile_contact = ' '.join(self.pathfile.split('.h5')[:-1]) + '_contact' + '.p'
+            self.pathfile_latest_cells_info = ' '.join(self.pathfile.split('.h5')[:-1]) + '_cells' + '.p'
+
+
         self.control_inf_norm = True
         self.restore_to_prev_converge_if_AS_wrong = False
+
 
     ################################################################################
                             # CONSTRUCTOR
@@ -198,10 +205,10 @@ class Solver():
                 elif ContinueFailed == '1':
                     # the last non failed step
                     self.restore_previously_converged()
+                    fext = FEM.fext
                 else:
                     raise ValueError('Incorrect input')
         else:
-
             self.set_tot_ndofs(FEM.tot_ndofs)
             fext = zeros(FEM.ndofs_el, dtype=np.float)
             step_start = 0
@@ -219,8 +226,6 @@ class Solver():
         #------------------------------------------------------------------------------
             # INITIALIZE SOLVER AND CREATE OUTPUT FILE TO STORE SIM. RESULTS
         #------------------------------------------------------------------------------
-
-
 
         tn = 0
         self.stp = 0
@@ -260,48 +265,13 @@ class Solver():
         # stored cumulative displacement during TS
         FEM = self.FEM
         with open_file(self.pathfile, mode = 'r') as fileh:
-            # last converged
+            # last converged increment
             nlc = fileh.root.TS.Results.shape[0] - 1
             if nlc == -1:
                 # means we restore the system in its initial state
-                print('restore initial config ')
-                ulc = zeros(FEM.u.shape)
-                #rotational dofs
-                vlc = zeros(FEM.v.shape)
-            elif nlc < -1:
-                raise ValueError('cannot restore system')
-            else:
-                ulc = fileh.root.TS.Results[nlc]['u'].reshape(self.FEM.nn,3)
-                #rotational dofs
-                vlc = fileh.root.TS.Results[nlc]['rot_vect'].reshape(self.FEM.nn,3)
-                if FEM.HasSphere:
-                    # directly set the position of the sphere
-                    FEM.Sphere.setCenterPosition(fileh.root.TS.Results[nlc]['PosCSp'])
+                raise NotImplementedError
+        self.LoadTS(nlc)
 
-            if FEM.HasConstraints:
-                # can be turned off if we want to do a step with a different active set
-                if recover_AS:
-                    Tab = FEM.ContactTable
-                    Tab.active_set[:] = 0
-                    # the AS has been saved with argwhere and flattened becaue we cannot save tuples in PyTables
-                    AS = tuple( fileh.root.TS.active_set[nlc].reshape(-1,3).T)
-                    Tab.active_set[AS] = True
-                    Tab.dofs_LM[:] = -999
-                    Tab.regenerate_dofs(FEM.ndofs_el)
-                    #Tab.gN[AS] = fileh.root.TS.Results[nlc]['gN']
-                    if self.FEM.enforcement == 1:
-                        Tab.LM[AS] = fileh.root.TS.LM[nlc]
-                    elif self.FEM.enforcement == 0:
-                        Tab.kN[AS] = fileh.root.TS.kN[nlc]
-                    else:
-                        raise ValueError('case not recognized')
-
-        DEL_u = FEM.u - ulc
-        DEL_v = FEM.v - vlc
-        DEL_U = zeros((FEM.nn , 6), dtype = float)
-        DEL_U[:,:3] = DEL_u
-        DEL_U[:,3:] = DEL_v
-        FEM.update_config_geometrically_exact_beams(- DEL_U.ravel())
         print('System restored to previous converged TS')
 
 
@@ -860,7 +830,7 @@ class Solver():
                     base = 'Analysis with same parameters has already been done'
                     print(base + end)
                     LoadResults = input(
-                        "1 : load results and continue \n0 : start analysis from scratch(0) ? \n")
+                        "1 : load stored results\n0 : start analysis from scratch \n")
                 except IndexError:
                     fileh.close()
                     os.remove(self.pathfile)
@@ -896,16 +866,8 @@ class Solver():
                 else:
                     raise NotImplementedError
 
-            v = Float32Col(shape=(ndofs,))
-            a = Float32Col(shape=(ndofs,))
-            fd = Float32Col(shape=(ndofs,))
+            fext = Float32Col(shape=(ndofs,))
             t = Float32Col()
-            Eint = Float32Col()
-            Ekin = Float32Col()
-            Wext = Float32Col()
-            D = Float32Col()
-            Dt = Float32Col()
-            NAct = Int32Col(shape=(1,))
             if self.FEM.HasSphere:
                 # store the successive positions of the center of the sphere
                 PosCSp = Float32Col(shape=(3,))
@@ -946,28 +908,6 @@ class Solver():
         TabInfo = fileh.create_table(
             "/TS", 'Info', RunInfo, 'Info on the Simu')
 
-        if self.FEM.HasConstraints:
-            # --> we cannot know the number of active contact points in advance.
-            # this is why we create this array with variable dimensions
-            # in the case we wan to store the positions of the contact points
-            """
-            fileh.create_vlarray(
-                fileh.root.TS, 'xCtc', Float32Col(
-                    (2, 3)), "xC")
-            """
-            # Array with VARIABLE length
-            # --> we cannot know the number of active contact points in advance.
-            # store normal gap
-            fileh.create_vlarray(fileh.root.TS, 'active_set', Int32Atom(  shape= () ), "active_set")
-            fileh.create_vlarray(fileh.root.TS, 'gN', Float32Atom(), "gN")
-            #fileh.create_vlarray(fileh.root, 'index_elements', tables.Int32Atom(shape=((2,))), "index_elements")
-            if self.FEM.enforcement == 0:
-                fileh.create_vlarray(fileh.root.TS, 'kN', Float32Atom(), "kN")
-            elif self.FEM.enforcement == 1:
-                fileh.create_vlarray(fileh.root.TS, 'LM',
-                        Float32Atom(), "LM")
-            else:
-                raise ValueError('unknown case')
 
         if not self.Static:
             a0 = np.nan
@@ -977,22 +917,30 @@ class Solver():
             Gamma = np.nan
         # complete the info tab with the numerical parameters
         row = TabInfo.row
-        """
-        row['name'] = filename
-        row['a0'] = a0
-        row['a1'] = a1
-        row['Alpha'] = Alpha
-        row['Beta'] = Beta
-        row['Gamma'] = Gamma
-        """
         # do not forget to append the array and to flush the Table to free
         # memory !
         row.append()
         TabInfo.flush()
         fileh.close()
         assert not fileh.isopen
-        print('Output file successfully created !')
 
+
+        if self.FEM.HasConstraints:
+            set_trace()
+            # will be used for storage
+            # the last dict is to store kN or the values of the LM
+            h_H = dict()
+            gN_H = dict()
+            active_cells_H = dict()
+            active_set_H= dict()
+            ID_master_H= dict()
+            value = dict()
+
+            # we will need to store the results for all increments in
+            with open(self.pathfile_contact, "wb") as f:
+                pickle.dump((h_H, gN_H, active_cells_H, active_set_H , ID_master_H, value), f)
+
+        print('Output file successfully created !')
         return 0, 0, 0
 
     #------------------------------------------------------------------------------
@@ -1033,32 +981,13 @@ class Solver():
                 self.ustrd[:] = uTC
                 #self.Wextersotrted [:] = uTC
 
-            if FEM.HasConstraints:
-                # append the information on contact elements
-                Tab = FEM.ContactTable
-                # count the number of contact points that are penetrated
-                # (active)
-                # the structures of TS.gN and TS.kN is a vlarray that allows to store arrays of differetns
-                # lengths
-
-                # IMPORTANT NOTEL: tuple(np.argwhere(Tab.active_set).T) == np.where(Tab.active_set)
-                AS = Tab.active_set
-                # has to flatten to be saved
-                fileh.root.TS.active_set.append(AS)
-                #fileh.root.TS.gN.append(Tab.gN[AS])
-                if self.FEM.enforcement == 1:
-                    fileh.root.TS.LM.append(Tab.LM)
-                elif self.FEM.enforcement == 0:
-                    fileh.root.TS.kN.append(Tab.kN)
-                else:
-                    raise ValueError('case not recognized')
-
             tab = fileh.root.TS.Results
             # get reference to pointer to current row in table
             row = tab.row
             # commit the result of the current time step
             row['u'] = uTC.ravel()
             row['t'] = t
+            row['fext'] = fextTC
             if FEM.HasSphere:
                 row['PosCSp'] = FEM.Sphere.C
             if self.FEM.GeoExact:
@@ -1071,6 +1000,44 @@ class Solver():
             tab.flush()
         assert not fileh.isopen
 
+        if FEM.HasConstraints:
+            # store the contact history in another file due to the specificity of the contact
+            # sceheme (change in the number of active set and so on)
+
+            with open(self.pathfile_contact, "rb") as f :
+                h_H, gN_H, active_cells_H, active_set_H, ID_master_H, value = pickle.load(f)
+
+
+            # append the information on contact elements
+            Tab = FEM.ContactTable
+            # add new key for the time step to the dictionnary
+            key = str(self.stp)
+            active_set_H[key] = Tab.active_set
+            h_H[key] = Tab.h
+            gN_H[key] = Tab.gN
+            active_cells_H[key] = Tab.active_cells
+            ID_master_H[key] = Tab.ID_master
+
+            if active_set_H is h_H:
+                raise ValueError('references to the same object !')
+            #if len(Tab.active_cells) > 0: set_trace()
+            if FEM.enforcement == 0:
+                value[key] = Tab.kN
+            elif FEM.enforcement == 1 :
+                value[key] = Tab.LM
+
+            with open(self.pathfile_contact,  "wb") as f:
+                pickle.dump((h_H, gN_H, active_cells_H, active_set_H, ID_master_H,  value), f)
+
+            # for the info on the cells, only the last converged increment is of interest.
+            # Everything can be stored in a dict
+            cell_info = dict()
+            for attr in 'ID_master_Ctr hCtr KSI_Cells CON_Cells '.split(' '):
+                cell_info[attr] = getattr(Tab, attr)
+
+            with open(self.pathfile_latest_cells_info, "wb") as f:
+                pickle.dump(cell_info, f)
+
     #------------------------------------------------------------------------------
     #
 
@@ -1081,10 +1048,40 @@ class Solver():
         with open_file(self.pathfile, mode='r') as fileh:
             #dofs in displacement
             self.FEM.u =\
-            fileh.root.TS.Results[n]['u'].reshape(self.nn,3)
+                fileh.root.TS.Results[n]['u'].reshape(self.FEM.nn,3).astype(np.double)
             #rotational dofs
             self.FEM.v =\
-                    fileh.root.TS.Results[n]['rot_vect'].reshape(self.nn,3)
+                    fileh.root.TS.Results[n]['rot_vect'].reshape(self.FEM.nn,3).astype(np.double)
+
+            self.FEM.fext =\
+                    fileh.root.TS.Results[n]['fext']
+        if self.FEM.HasConstraints:
+            Tab = self.FEM.ContactTable
+            key = str(n)
+            if not os.path.isfile(self.pathfile_contact):
+                raise IOError('Cannot open file ')
+
+            with open(self.pathfile_contact, mode="rb") as f:
+                h_H, gN_H, active_cells_H, active_set_H, ID_master_H, value = pickle.load(f)
+                if self.FEM.enforcement ==0 :
+                    Tab.kN = value[key]
+                elif self.FEM.enforcement == 1 :
+                    Tab.LM = value[key]
+                set_trace()
+                Tab.active_set = active_set_H[key]
+                Tab.active_cells = active_cells_H[key]
+                Tab.gN = gN_H[key]
+                Tab.h = h_H[key]
+                Tab.ID_master = ID_master_H[key]
+
+
+            with open(self.pathfile_latest_cells_info, "rb") as f:
+                cell_info = pickle.load(f)
+
+            for attr in 'ID_master_Ctr hCtr KSI_Cells CON_Cells '.split(' '):
+                setattr(Tab, attr, cell_info[attr])
+
+
 
 
     #------------------------------------------------------------------------------

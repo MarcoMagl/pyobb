@@ -72,7 +72,14 @@ class ContactTable():
     #
     #------------------------------------------------------------------------------
     def query_is_active_slave(self, id_s):
-        return id_s in self.active_set
+        idx = np.argwhere(self.active_set == id_s)
+        if idx.shape[0] == 0:
+            return False, None
+        elif idx.shape[0] == 1:
+            return True, int(idx)
+        else:
+            raise ValueError('index should be unique')
+
 
     #------------------------------------------------------------------------------
     #
@@ -240,12 +247,68 @@ class ContactTable():
         self.gN.append(np.nan *ones((new_act_cell, self.nxiGQP, self.nthetaGQP), dtype = np.float))
         self.kN.append(self.kNmin)
 
+        self.check_array_size_for_contact()
 
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def check_array_size_for_contact(self):
         nAct = len(self.active_set)
         # list of arrays
         for attr in 'active_set active_cells ID_master_Ctr hCtr KSI_Cells CON_Cells ID_master h gN'.split(' '):
             assert len(getattr(self, attr)) == nAct
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def del_contact_element(self, idx_in_Tab):
+        set_trace()
+        for attr in 'active_set active_cells ID_master_Ctr hCtr KSI_Cells CON_Cells ID_master h gN'.split(' '):
+            del getattr(self, attr)[idx_in_Tab]
+        self.check_array_size_for_contact()
 
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def modify_set_of_active_cells(self, id_c_slave, new_active_cells):
+        # use the date of the narrow phase if some active cells were already active. Otherwise, add
+        # and remove the active cells
+        assert isinstance(id_c_slave, int)
+        assert id_c_slave <= len(self.active_set) - 1, 'asking for index too high'
+
+        # TODO : there is something completelety unclear: i keep in memory all the cells, even the
+        # inactive ones. This is pointless
+
+        # add the cells not in the set
+        for cell in new_active_cells:
+            if not cell in self.active_cells[id_c_slave]:
+                self.active_cells[id_c_slave] =  np.append(self.active_cells[id_c_slave], [cell], axis = 0 )
+                self.h[id_c_slave] =  np.append(self.h[id_c_slave],
+                        np.nan * ones((1, self.nxiGQP, self.nthetaGQP,4))
+                        , axis = 0 )
+                self.gN[id_c_slave] = np.append(self.gN[id_c_slave],
+                        np.nan *ones((1, self.nxiGQP, self.nthetaGQP), dtype = np.float),
+                        axis = 0 )
+
+                self.ID_master[id_c_slave] = np.append(self.ID_master[id_c_slave],
+                    -999* ones((1, self.nxiGQP, self.nthetaGQP), dtype = np.int),
+                    axis = 0 )
+
+            # else we keep the accurate info we got from the contact routines already performed !
+
+        # remove the unactive cells from the set
+        to_remove = np.setdiff1d(self.active_cells[id_c_slave], new_active_cells )
+        idx = []
+        for to_remove_ii in to_remove:
+            idx.append(int( np.argwhere(self.active_cells[id_c_slave] == to_remove_ii)))
+        assert len(idx) == len(to_remove)
+
+        for arr in ['active_cells', 'h', 'ID_master', 'gN']:
+            # axis 0 fundamental ! otherwise the array is flattened
+            getattr(self, arr)[id_c_slave] =\
+            np.delete(getattr(self, arr)[id_c_slave], idx, axis = 0)
+        assert len(self.active_cells[id_c_slave] ) == len(new_active_cells)
 
     #------------------------------------------------------------------------------
     #
