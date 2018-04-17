@@ -34,7 +34,6 @@ from joblib import Parallel, delayed
 from joblib.pool import has_shareable_memory
 import multiprocessing
 from Common.cython_ext import narrow_phase
-from pyobb.obb import OBB
 
 #------------------------------------------------------------------------------
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -623,7 +622,6 @@ class Model():
 
             check_penetration_cells = False
 
-
             if is_active_slave and nmclose == 0:
                 if np.all(Tab.gN[idx_in_AS]) > 0:
                     Tab.del_contact_element(idx_in_AS)
@@ -638,21 +636,31 @@ class Model():
                             opacity = 1., color = (0.,0.,0.) )
                     plot_AABB(self.box_lim[slave])
                     set_trace()
-                    raise ValueError('should not happen')
-
-
+                    raise ValueError('sudden loss of contact not allowed')
 
             if  nmclose >0:
-                assert np.array_equal(np.unique(master_close), np.array(master_close).ravel())
-                # construct slave obb
+                assert np.array_equal(np.unique(master_close), np.sort(
+                    np.array(master_close).ravel()))
+
                 id_els_sl = self.el_per_curves[slave]
+                # construct slave obb around entire slave curve
                 samp_slave = self.sample_surf_point_on_smooth_geo(\
                         id_els_sl,\
                         nxi_sampled,\
                         ntheta_sampled,\
                         array([0,1]),
                         array([0,2*np.pi])).reshape(-1,3)
-                obb_slave = OBB.build_from_points(samp_slave)
+                obb_slave = build_obb(samp_slave)
+                bi = self.control_points(slave)
+                obb_slave =\
+                        build_obb_from_control_points(bi,
+                                0.5 * self.a_crossSec[slave])
+
+                self.plot_integration_interval(
+                        self.el_per_curves[slave],
+                        array([0, 1.]),
+                        array([0, 2 * np.pi]),
+                        opacity = 1., color = (0.,0.,0.) )
 
                 # master obb(s)
                 samp_on_master_candi =\
@@ -668,17 +676,18 @@ class Model():
                             ntheta_sampled,\
                             xi_lim_mstr,\
                             theta_lim_mstr)
-                    obb_master.append(OBB.build_from_points(samp_on_master_candi[uu].reshape(-1,3)))
+                    obb_master.append(build_obb(samp_on_master_candi[uu]))
 
                 # is there intersection between the OBB containing the whole slave curve and the
                 # master one ?
                 collision_obb = False
                 for obb_m in obb_master:
-                    if collision_btw_obb(obb_m, obb_slave, eps = 0.01 * norm(obb_m.extents)):
+                    if collision_btw_obb(obb_m, obb_slave, eps = 1e-10):
                         collision_obb = True
 
 
                 if collision_obb:
+                    # a closer look at the penetration is needed
                     check_penetration_cells = True
                     # establish the limit of the integration domain
                     # construct obb for each slave domain
@@ -695,12 +704,15 @@ class Model():
                                 Tab.xi_lim[ii],
                                 Tab.theta_lim[jj])
                         obb_slv_II.append(OBB.build_from_points(samp_slv_II.reshape(-1,3)))
+                        # get teh traid at the beginning of the interval
+
 
                         for obb_m in obb_master:
                             if collision_btw_obb(obb_slv_II[-1], obb_m):
                                 has_int_xi_lim.append(Tab.xi_lim[ii])
                                 has_int_theta_lim.append(Tab.theta_lim[jj])
 
+                    set_trace()
                     if len(has_int_xi_lim) == 0 or len(has_int_theta_lim) == 0 :
                         raise ValueError('No slave interval intersecting master curves has not been found')
 
@@ -709,20 +721,21 @@ class Model():
                     has_int_theta_lim = asarray(has_int_theta_lim)
 
                     # this interval will be the one on which we will construct the cells
-                    xi_lim_slv = array([np.min(has_int_xi_lim[:,0], axis = 0),\
-                            np.max(has_int_xi_lim[:,1], axis = 0)]).ravel()
-                    theta_lim_slv = array( [np.min(has_int_theta_lim[:,0], axis = 0),\
-                            np.max(has_int_theta_lim[:,1] , axis = 0)] ).ravel()
+                    xi_lim_slv, theta_lim_slv = self.extract_slave_interval(
+                            has_int_xi_lim, has_int_theta_lim)
 
                     # TODO: must be generalized
-                    nxi = int(Tab.nxiGQP)
-                    ntheta = int(Tab.nthetaGQP)
+                    # number of cells along the xi and theta axis
+                    nxi_slice = int(Tab.n_cells_xi_per_slice)
+                    ntheta_slice = int(Tab.n_cells_theta_per_slice)
+
                     # cut the interval in unit cell
                     KSI, con = generation_grid_quadri_and_connectivity(
-                            xi_lim_slv, theta_lim_slv, nxi, ntheta)
+                            xi_lim_slv, theta_lim_slv, nxi_slice, ntheta_slice)
                     # convective coord center of the cell
                     KSIC = 0.5 * (KSI[con[:,0],] + KSI[con[:,2],] )
-                    # area in the space of the convective coordinates
+                    # area in the space of the convective coordinates for each cell (they all have
+                    # the same weigth)
                     wxi =  (KSI[con[:,1],] - KSI[con[:,0],])[:,0]
                     wtheta = (KSI[con[:,3],] - KSI[con[:,0],])[:,1]
 
@@ -735,6 +748,7 @@ class Model():
 
                     # for each cell, measure gN at its center
                     for ii, KSICii in enumerate(KSIC):
+                        #TODO: if some info from the previous increment is available, use it
                         xGQP = self.get_surf_point_smoothed_geo(id_els_sl, KSICii)
                         # among the possible master candidates, spot the closest sampled
                         # point from the current GQP
@@ -759,6 +773,7 @@ class Model():
                         Sol_correct = 0
                         ct_corrections = 0
 
+                        # siolve the minimum distance problem at each center of a cell
                         while not Sol_correct:
                             (gNii, hii,
                                     w_ii,\
@@ -815,6 +830,7 @@ class Model():
                                     hFG)
 
                             if Tab.enforcement == 1:
+                                raise NotImplementedError('deprectd')
                                 if is_active_slave:
                                     # interpolate LM
                                     set_trace()
@@ -826,7 +842,10 @@ class Model():
 
                         KSISol[ii] = hii
                         gNSol[ii] = gNii
-                        IDM[ii] = current_curves[1]
+                        IDM[ii] = int(current_curves[1])
+                    set_trace()
+                    self.plot_all_cells_centers_and_gap(current_curves[0], KSICii, KSISol, gNSol, IDM)
+
 
             # was the slave already present in the contact list ?
             # if not create new entry in the contact table
@@ -882,6 +901,25 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
+
+    def extract_slave_interval(self,  has_int_xi_lim,
+            has_int_theta_lim):
+        xi_lim_slv = array([np.min(has_int_xi_lim[:,0], axis = 0),\
+                np.max(has_int_xi_lim[:,1], axis = 0)]).ravel()
+        # Special attention because of the periodicity of the trigonometric
+        # circle. The easiest way is to determine the integration interval using
+        # degrees
+        has_int_theta_lim = np.degrees(has_int_theta_lim)
+        theta_lim_slv = array([has_int_theta_lim.min(),
+            has_int_theta_lim.max()])
+        range_deg = theta_lim_slv[1] - theta_lim_slv[0]
+        if range_deg < 1:
+            raise ValueError('integration domain too small')
+        if range_deg > 180:
+            raise ValueError('integration domain too broad')
+
+
+        return xi_lim_slv, np.radians(theta_lim_slv )
 
 
     #------------------------------------------------------------------------------
@@ -1251,6 +1289,63 @@ class Model():
                 xFG_arr[:,2], mode = 'point', color = (1.,0.,0.) )
         set_trace()
         """
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def plot_all_cells_centers_and_gap(self,
+            id_slv, KSICii, KSISol, gN_arr, IDM ):
+
+
+        Tab = self.ContactTable
+        nvalue = KSICii.shape[0]
+        xGQP_arr = zeros((nvalue, 3 ), dtype= float)
+        xFG_arr = zeros(xGQP_arr.shape, dtype= float)
+        # get color from the value of the gap
+        s =  gN_arr
+
+        for ii in range(nvalue):
+            current_curves = array([id_slv, IDM[ii]])
+            xi_slv = array(KSICii[ii])
+            id_els = self.el_per_curves[current_curves,].ravel()
+            xGQP_arr[ii] = self.get_surf_point_smoothed_geo(id_els[(0,1),], KSICii[ii])
+            xFG_arr[ii] = self.get_surf_point_smoothed_geo(id_els[(2,3),], KSISol[ii])
+
+        self.plot(opacity = 0.2, diff_color_each_element = False)
+
+        # Create the points to connect
+        x = np.vstack( (xGQP_arr[:,0],  xFG_arr[:,0])).T.ravel()
+        y = np.vstack( (xGQP_arr[:,1],  xFG_arr[:,1])).T.ravel()
+        z = np.vstack( (xGQP_arr[:,2],  xFG_arr[:,2])).T.ravel()
+        # one color for each point. interpolation between them
+        s = np.vstack( (s,  s)).T.flatten()
+
+        if not hasattr(self, 'src_center_cells'):
+            self.src_center_cells= mlab.pipeline.scalar_scatter(x, y, z, s)
+            connections = np.arange(2 * xGQP_arr.shape[0]).reshape(-1,2)
+            # Connect them
+            self.src_center_cells.mlab_source.dataset.lines = connections
+            # The stripper filter cleans up connected lines
+            self.lines = mlab.pipeline.stripper(self.src_center_cells)
+        else:
+            self.src_center_cells.mlab_source.set(x=x, y=y, z=z, s=s)
+
+        lines = self.lines
+        self.src_center_cells.update()
+        # Finally, display the set of lines
+        mlab.pipeline.surface(lines, colormap='Accent', line_width=1, opacity=.4)
+        scalar_lut_manager = self.lines.children[0].scalar_lut_manager
+        scalar_lut_manager.show_scalar_bar = True
+        scalar_lut_manager.data_name = 'gN at center'
+        mlab.points3d(xGQP_arr[:,0],
+                xGQP_arr[:,1],
+                xGQP_arr[:,2], mode = 'point', color = (1.,1.,1.) )
+        """
+        mlab.points3d(xFG_arr[:,0],
+                xFG_arr[:,1],
+                xFG_arr[:,2], mode = 'point', color = (1.,0.,0.) )
+        set_trace()
+        """
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
@@ -1299,48 +1394,6 @@ class Model():
         for eli in (self.el):
             eli.plot_nodes(color, opacity)
 
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def plot_all_contact(self):
-        """
-        plot the pair of candidate of contact with different colors
-        """
-        assert self.is_set_ContactTable, "Contact table is not set "
-        Tab = self.ContactTable
-        raise DepreactionWarning
-        f = mlab.gcf()
-        f.scene.disable_render = True
-        for id_curves in np.argwhere(self.ContactTable.close_curves):
-            self.plot_contact_surface_and_contact_point(id_curves)
-        # reactivate the rendering
-        f.scene.disable_render = False
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def plot_contact_surface_and_contact_point(self, id_curves ):
-        """
-        plot the contact points using the info stored in the contact table
-        """
-        Tab = self.ContactTable
-        assert self.package_plot == 'mayavi'
-        assert self.is_set_ContactTable
-        Tab = self.ContactTable
-        assert id_curves.shape == (2,)
-        h = Tab.h[id_curves[0], id_curves[1]]
-        self.plot_pairs_of_smoothed_surface(\
-            self.el_per_curves[id_curves,],\
-            different_color= True)
-        self.plot_surf_point_smoothed_geo(\
-                    self.el_per_curves[id_curves[0]],\
-                        array(h[:2]),\
-                       color = (0., 1., 0.) )
-        self.plot_surf_point_smoothed_geo(\
-                    self.el_per_curves[id_curves[1]],\
-                array(h[2:4]),\
-                       color = (1., 1., 0.) )
 
 
     #------------------------------------------------------------------------------
@@ -1901,6 +1954,19 @@ class Model():
     ################################################################################
                                     # VARIOUS
     ################################################################################
+    def control_points(self, id_c):
+        id_els = self.el_per_curves[id_c]
+        b1,b2 = self.el[id_els,]
+        nd_C = asarray([b1.nID[0], b1.nID[1], b2.nID[1]]).ravel()
+        x1,x2,x3 = (self.X[nd_C,].ravel() + self.u[nd_C,].ravel()).reshape(3,3)
+        alpha = self.ContactTable.alpha
+        B0=1/2 * (x2+x1);
+        B1=B0+(x2-B0) * alpha;
+        B3=1/2 * (x2+x3);
+        B2=alpha*x2+(B3)*(1-alpha);
+        return array([B0,B1,B2,B3])
+
+
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
@@ -2468,17 +2534,6 @@ class Model():
                     id_els[(2,3),],
                     hFG)
 
-            self.plot_integration_interval(id_els[(0,1),],\
-                    xi_lim_slv,
-                    theta_lim_slv,
-                    opacity = 0.9, color = (0.,0.,0.) )
-
-            self.plot_integration_interval(id_els[(2,3),],\
-                    xi_lim_mstr,
-                    theta_lim_mstr,
-                    opacity = 0.9,
-                    color = (0., 1.,1.))
-
 
             assert xmstr.shape == (3,)
             assert xslv.shape == (3,)
@@ -2867,6 +2922,7 @@ class Model():
     #
     #------------------------------------------------------------------------------
     def plot_all_GQP(self):
+        raise DeprecationWarning
         nGQPxi = self.nGQPxi
         nGQPtheta = self.nGQPtheta
         nuxiGQP, WnuxiGQP =  np.polynomial.legendre.leggauss(nGQPxi)

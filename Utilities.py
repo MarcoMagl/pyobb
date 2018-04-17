@@ -10,7 +10,9 @@ from mayavi import mlab
 import cProfile, pstats
 from interval import Interval
 import itertools
-
+from pyobb.obb import OBB
+from scipy.spatial import ConvexHull
+from sklearn.preprocessing import normalize
 
 #------------------------------------------------------------------------------
 
@@ -339,7 +341,7 @@ def plot_AABB(blim):
            coord[:,1],
            coord[:, 2],
         color = (0.,1.,0.),
-        scale_factor = 0.02)
+        mode = 'point')
 
 
 #------------------------------------------------------------------------------
@@ -354,7 +356,7 @@ def is_point_in_AABB(blim, Pt):
 
 #------------------------------------------------------------------------------
 #
-#-----------------------------------------------------------------------------
+#2-----------------------------------------------------------------------------
 def get_surface_points_sphere(r,c):
     assert c.shape==(3,)
     assert isinstance(r, float)
@@ -424,9 +426,7 @@ def scatter_3d(coords, color = (1.,0.,0.),\
             coords[:,1],\
             coords[:,2],\
             color = color,\
-            scale_factor = scale_factor)
-    return mlab.mesh(x, y, z, color = color )
-
+            mode = 'point')
 
 
 #------------------------------------------------------------------------------
@@ -477,16 +477,62 @@ def overlaps(int1, int2):
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def collision_btw_obb(obb0_obj, obb1_obj, eps = 0 ):
-    # determine the normals of all the facets of the obb
-    # order the vertices of the 3D geometry
-    assert eps >= 0
-    obb0 = np.concatenate(obb0_obj.points).reshape(-1,3)
-    obb1 = np.concatenate(obb1_obj.points).reshape(-1,3)
-    assert obb0.shape == (8,3)
-    assert obb1.shape == (8,3)
-    # from the doc of OBB, https://github.com/pboechat/pyobb/blob/master/pyobb/obb.py
-    # I got the following connectivity for each facet
+def build_obb(pts, use_convex_hull = True):
+    if not pts.ndim == 2:
+        pts = pts.reshape(-1,3)
+    assert pts.shape[-1] == 3, '3D coordinates are expected'
+
+    if not use_convex_hull:
+        return OBB.build_from_points(pts)
+    else:
+        # construct the convex hull first and determine the obb from its vertices
+        return OBB.build_from_points(pts[ConvexHull(pts).vertices])
+
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def build_obb_from_control_points(bi, exp = 0.):
+    if not bi.shape == (4,3):
+        raise ValueError('incorrect shape')
+    obbi = build_obb(bi, use_convex_hull = False)
+    if exp < 0:
+        raise ValueError('extension of the obb must be positive')
+    #plot_obb_vertices(obbi, color = (1., 0., 0.))
+    if exp > 0. :
+        # expand the obb in all the directions by exp
+        # one only has to expand the limits of the obb measured in the local frame
+        obbi.max += exp
+        obbi.min -= exp
+        #plot_obb_vertices(obbi, color = (1., 1., 0.))
+    return obbi
+
+
+
+
+
+
+
+
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def build_obb_along_triad(pts, triad):
+    if not pts.ndim == 2:
+        pts = pts.reshape(-1,3)
+    assert pts.shape[-1] == 3, '3D coordinates are expected'
+    # the OBB is constructed along the triad provided
+    return CustomOBB(triad, points).points
+
+
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def get_center_facet_and_normal_vec_obb(obb,):
+    obb_vrtx = array(obb.points)
+    assert obb_vrtx.shape == (8,3)
     con = array([
         [0,1,2,3],
         [4,5,6,7],
@@ -494,29 +540,28 @@ def collision_btw_obb(obb0_obj, obb1_obj, eps = 0 ):
         [0,3,6,5],
         [0,1,4,5],
         [2,3,6,7]])
+    # center of gravity of the obb
+    ctr = obb_vrtx[0] + 0.5 * (obb_vrtx[7] - obb_vrtx[0])
+    assert np.allclose(ctr, obb.centroid)
+    cf = 0.5 * ( obb_vrtx[con[:,0]] + obb_vrtx[con[:,2]] )
+    # directly return the matrix containing the normed normal vectors to the faced
+    return cf, normalize(cf - ctr , axis=1, norm='l1')
 
-    # coordinate center of the box
-    c0 = obb0[0] + 0.5 * (obb0[7] - obb0[0])
-    c1 = obb1[0] + 0.5 * (obb1[7] - obb1[0])
-    assert np.allclose(c0, obb0_obj.centroid)
-    assert np.allclose(c1, obb1_obj.centroid)
-    # center of each facet
-    cf_0 = zeros((6,3))
-    cf_1 = zeros((6,3))
-    # normal of each facet
-    n_0 = zeros((6,3))
-    n_1 = zeros((6,3))
 
-    for i in range(6):
-        cf_0[i] = 0.5 * ( obb0[con[i,0]] + obb0[con[i,2]] )
-        cf_1[i] = 0.5 * (obb1[con[i,0]] + obb1[con[i,2]] )
-        n_0[i] = cf_0[i] - c0
-        n_1[i] = cf_1[i] - c1
 
-    n = np.vstack((n_0, n_1))
-
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def collision_btw_obb(obb0_obj, obb1_obj, eps = 0 ):
+    # determine the normals of all the facets of the obb
+    # order the vertices of the 3D geometry
+    cf_0, n_0 = get_center_facet_and_normal_vec_obb(obb0_obj)
+    cf_1, n_1 = get_center_facet_and_normal_vec_obb(obb0_obj)
+    obb0 =array( obb0_obj.points)
+    obb1 = array(obb1_obj.points)
+    assert eps >= 0
     # test projection along all the directions of the normal to the facets
-    for ii, nii  in enumerate(n):
+    for ii, nii  in enumerate(np.vstack((n_0, n_1)) ):
         # project all the vertices of the first obb
         p0 = np.dot(obb0, nii)
         p1 = np.dot(obb1, nii)
@@ -527,18 +572,17 @@ def collision_btw_obb(obb0_obj, obb1_obj, eps = 0 ):
             # the intervals are not overlapping, it means the 2 convex hull are not colliding
             return False
 
-
     """
-    mlab.points3d(cf_0[:,0], cf_0[:,1], cf_0[:,2])
-    mlab.points3d(cf_1[:,0], cf_1[:,1], cf_1[:,2])
+    mlab.points3d(cf_0[:,0], cf_0[:,1], cf_0[:,2], mode = 'point')
+    mlab.points3d(cf_1[:,0], cf_1[:,1], cf_1[:,2], mode = 'point')
     plot_obb_vertices(obb0_obj, color =  (1.,1.,1.) )
-    plot_obb_vertices(obb1_obj, color =  (1.,1.,1.) )
-    mlab.quiver3d(cf_0[:,0], cf_0[:,1], cf_0[:,2],
-            n_0[:,0], n_0[:,1], n_0[:,2])
-    mlab.quiver3d(cf_1[:,0], cf_1[:,1], cf_1[:,2],
-            n_1[:,0], n_1[:,1], n_1[:,2])
-    set_trace()
+    plot_obb_vertices(obb1_obj, color =  (1.,0.,0.) )
     """
+
+    #mlab.quiver3d(cf_0[:,0], cf_0[:,1], cf_0[:,2],
+    #        n_0[:,0], n_0[:,1], n_0[:,2])
+    #mlab.quiver3d(cf_1[:,0], cf_1[:,1], cf_1[:,2],
+    #        n_1[:,0], n_1[:,1], n_1[:,2])
     # did not find a separating axis
     return True
 
@@ -559,7 +603,8 @@ def plot_obb_vertices(obb, color =  (1.,1.,1.) ):
         vi = vertices[coni,]
         mlab.plot3d(vi[:,0],
                 vi[:,1],
-                vi[:,2], color = color)
+                vi[:,2], color = color,
+                tube_radius = None)
     """
     mlab.points3d(vertices[:,0],
         vertices[:,1],
@@ -631,7 +676,6 @@ def plot_cells_regular_grid(X, con, In2D = False):
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-
 
 
 

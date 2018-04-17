@@ -88,15 +88,7 @@ class Solver():
         tmax= Loading.tfinal
         ndofs = FEM.ndofs_el
 
-        if not self.Static:
-            # generate "unique" output filename
-            filename =  str("%.fsec" %
-                        (tmax)) + str("%d" %
-                        (ndofs)) + str("%.f%.f" %
-                        (a0, a1)) + str("%.f%.f%.f" %
-                        (Alpha, Beta, Gamma)) + '.h5'
-        else:
-            filename =  str("%.fsec" %
+        filename =  str("%.fsec" %
                         (tmax)) + str("%ddofs" %
                         (ndofs)) + '.h5'
 
@@ -108,6 +100,8 @@ class Solver():
 
         self.control_inf_norm = True
         self.restore_to_prev_converge_if_AS_wrong = False
+        self.stp = 0
+        self.tn = 0
 
 
     ################################################################################
@@ -227,25 +221,22 @@ class Solver():
             # INITIALIZE SOLVER AND CREATE OUTPUT FILE TO STORE SIM. RESULTS
         #------------------------------------------------------------------------------
 
-        tn = 0
-        self.stp = 0
         while True:
             converged = 0
             failure_stp = 0
-
             while not converged:
-                t = tn + Loading.DELt
+                t = float(self.tn + Loading.DELt)
                 if t > Loading.tfinal:
                     self.SuccessSignal()
                     return
-                (duG, dfext, di, fr) = Loading.get_duG_dfext(t, tn, FEM.ndofs_el)
+                (duG, dfext, di, fr) = Loading.get_duG_dfext(t, self.tn, FEM.ndofs_el)
                 try:
                     (u, fr) = self.solve_TS_NR(duG, fext, di ,fr)
                     converged = 1
                     self.CommitTS(t, di, fr, u, fext)
                     self.stp += 1
                     self.adaptDELt(1)
-                    fextn = fext
+                    self.fext = fext
                 except FailedConvergence as error:
                     failure_stp += 1
                     self.adaptDELt(0)
@@ -255,7 +246,12 @@ class Solver():
                         raise Failure_Adaptive_TS(t)
                     else:
                         self.restore_previously_converged()
-            tn = t
+            self.tn = t
+
+
+        print('Assess continuity surface final config')
+        FEM.CheckContinuitySurface()
+
 
 
     #------------------------------------------------------------------------------
@@ -426,360 +422,6 @@ class Solver():
         return (FEM.u, fr)
 
 
-    #------------------------------------------------------------------------------
-
-    #                   DYNAMIC ANALYSIS
-
-    #------------------------------------------------------------------------------
-    def ExplicitCentralDiff(self, t, a0=0, a1=0, updateC=0):
-        """
-        CENTRAL DIFFERENCE METHOD IN TIME
-        From Belytschko p.313
-        CAREFUL : Explicit Time Integration from Bathe p.771 only valid for linear system.
-        Otherwise, must replace KU by fint !
-
-        VALID FOR NON CONSTANT TS TOO
-        """
-        Wov = self.Wov
-        LoadResults, Success, Lastnconv = self.getOutputFile(
-            t, 'Implicit', self._Ndofs, a0, a1)
-
-        if LoadResults:
-            if Success:
-                return
-            else:
-                ContinueFailed = input(
-                    "0 : just load failed analysis and return \n 1 : continue analysis from failed TS \n ")
-                if not ContinueFailed:
-                    return
-                else:
-                    n0 = Lastnconv
-
-        ndofs = Wov._Ndofs
-        un = Wov._u
-        unP1 = np.zeros(ndofs)
-        vn = np.zeros(ndofs)
-        vnP1 = np.zeros(ndofs)
-        an = np.zeros(ndofs)
-        anP1 = np.zeros(ndofs)
-        n = 0
-
-        # INITIALISATION OF THE SOLVER FOR t = 0 AND n = 0
-
-        (fextn, duG, di, fr, v, vimp) = self.Loading.getCurrentBCs(0, ndofs)
-        vfr = np.delete(np.arange(ndofs), (vimp))
-        fint, Kint, M, C = Wov.getforce(un, a0, a1, updateC)
-        vn[vimp] = v[vimp]
-        r = fextn - fint - inner(C, vn)
-        an[fr] = LA.solve(M[ix_(fr, fr)], r[fr])
-        # commit t = 0
-        self.CommitTS(n=0,
-                      di=di,
-                      fr=fr,
-                      uTC=un,
-                      vTC=vn,
-                      aTC=an,
-                      fintTC=fint,
-                      fextTC=fextn,
-                      Wov=Wov)
-        # to initialise the algortihm, we must infer from the data unM1 and from it we can
-        # construct vnM05
-        DtM05 = (t[1] - t[0])
-        unM1 = un - DtM05 * vn + -1.5 * DtM05**2 * an
-        # from the formula 5.8 Book DeBorst, Criesfield
-        vM05 = zeros(ndofs)
-        vM05[vfr] = (un - unM1)[vfr] / (-DtM05)
-        tM05 = 0.5 * (- DtM05)
-
-        for n in range(t.shape[0] - 1):
-            tP1 = t[n + 1]
-            tn = t[n]
-            tP05 = 0.5 * (tP1 + tn)
-            DtP05 = tP1 - tn
-            # get the BCs for the current simulation time + the indices : di for dirichlet indices,
-            # fr for free ones
-            (fext, duG, di, fr, v, vimp) = self.Loading.getCurrentBCs(tP1, ndofs, tn)
-            vfr = np.delete(np.arange(ndofs), (vimp))
-            unP1[di] = un[di] + duG[di]
-            # first update of the partial velocities
-            vP05 = zeros_like(unP1)
-            vP05[vfr] = (vn + (tP05 - tn) * an)[vfr]
-            vP05[vimp] = v[vimp]
-            unP1[fr] = un[fr] + DtP05 * vP05[fr]
-            fint, Kint, M, C = Wov.getforce(unP1, a0, a1, updateC)
-            r = fext - fint - inner(C, vP05)
-            # update acceleration
-            anP1[vimp] = 0
-            anP1[vfr] = LA.solve(M[ix_(vfr, vfr)], r[vfr])
-            vnP1[vfr] = vP05[vfr] + (tP1 - tP05) * anP1[vfr]
-            vnP1[vimp] = v[vimp]
-
-            selfCheckEnergyConsTS(raiseifFailed=1)
-
-            self.CommitTS(n=n + 1,
-                          di=di,
-                          fr=fr,
-                          uTC=unP1,
-                          vTC=vnP1,
-                          aTC=anP1,
-                          fintTC=fint,
-                          fextTC=fext,
-                          Wov=Wov)
-
-            # check the energy conservation of the TS
-
-            # update for next TS
-            un = np.copy(unP1)
-            vn = np.copy(vnP1)
-            an = np.copy(anP1)
-            vM05 = np.copy(vP05)
-
-            print('TS ' + repr(n + 1) + '\n')
-
-        print('------------------------------------------------------------------------------ ')
-        print('END OF ANAYSIS')
-        print('------------------------------------------------------------------------------ ')
-
-    #------------------------------------------------------------------------------
-
-    #------------------------------------------------------------------------------
-    def AlphaHHT(
-            self,
-            tmax,
-            NumericalParam='',
-            Alpha=0,
-            Gamma=0,
-            Beta=0,
-            a0=0,
-            a1=0,
-            updateC=0,
-            ConstantDt=1,
-            NTS=0):
-        # from DeBorst And Criesfield book
-        # from the book of Laursen: alpha = 1 means no numerical dissipation added by the HHT TI
-        # while Alpha = 0 means very high dissipation
-        # note that the Newmark's time integrator can be recovered by using
-
-        if not NumericalParam == '':
-            print('Set of numerical parameters set according to family of algo provided')
-            # provide numerical parameteres that control stability and
-            # dissipation by hand
-            if NumericalParam == 'OptimDissip':
-                Alpha = -0.1
-                Beta = 0.3025
-                Gamma = 0.6
-            elif NumericalParam == 'TR':
-                Alpha = 0
-                Beta = 0.25
-                Gamma = 0.5
-            else:
-                raise ValueError('NumericalParam not recognized')
-
-        if Alpha == 0:
-            if Gamma == 0:
-                Gamma = 0.5
-                # if Gamma = 0.5, we have the trapezoidal rule
-                Beta = 0.5 * Gamma
-
-            if Gamma == 0.5 and Beta == 0.25:
-                print('TRAPEZOIDAL RULE')
-            else:
-                print('DISSIPATIVE SCHEME CHOSEN')
-        else:
-            # if the parameters follow the next guidelines, unconditonnal stability is guaranteed
-            # and second order accuracy in time is assured for linear systems
-            if Gamma == 0 and Beta == 0:
-                if Alpha < 0 and Alpha > -1. / 3.:
-                    Beta = 0.25 * (1 - Alpha)**2
-                    Gamma = 0.5 - Alpha
-                else:
-                    raise Warning('The algorithmic parameters provided for the Alpha method do not\
-                                  follow the guidelines given by Criesfield ')
-            else:
-                if Alpha == 0.1 and Gamma == 0.6 and Beta == 0.3025:
-                    print('Optimal high frequency damping (Laursen 1997, Hilber 1977)')
-
-        if ConstantDt:
-            assert NTS > 0
-            assert not isinstance(tmax, np.ndarray)
-            Dt = tmax * (NTS)**(-1)
-        else:
-            raise NotImplementedError
-
-        # CREATE OUTPUT FILE
-        LoadResults, Success, t = self.getOutputFile(
-            tmax, 'AlphaHHT', self._Ndofs, a0, a1, Alpha, Beta, Gamma)
-
-        if LoadResults:
-            if Success:
-                return
-            else:
-                ContinueFailed = input(
-                    "0 : just load failed analysis and return \n 1 : continue analysis from failed TS \n ")
-                if not ContinueFailed:
-                    return
-                else:
-                    un, vn, an, tn, Dt = self.LoadTS()
-                    t = tn + Dt
-                    unP1 = zeros_like(un)
-                    vnP1 = zeros_like(un)
-                    anP1 = zeros_like(un)
-                    set_trace()
-
-        def getuNP1Tilde():
-            return un + Dt * vn + 0.5 * Dt**2 * (1 - 2 * Beta) * an
-
-        def getvNP1Tilde():
-            # 6.3.5 Belytschko
-            return vn + (1 - Gamma) * Dt * an
-
-        Wov = self.Wov
-        if a0 != 0 or a1 != 0:
-            Damping = 1
-        else:
-            Damping = 0
-
-        def get_r_A():
-            unPAlpha = (1 + Alpha) * unP1 - Alpha * un
-            fint, Kint, M, C = Wov.getforce(unPAlpha, a0, a1, updateC=updateC)
-            # velocity and acceleration update have the same formulas as in the
-            # Newmark scheme
-            anP1[fr] = (Beta * Dt**2)**(-1) * (unP1 - uTilde)[fr]
-            vnP1[fr] = (vTilde + Gamma * Dt * anP1)[fr]
-            vnP1[vimp] = v[vimp]
-            # vnPAlpha = (1 + Alpha) * vnP1 - Alpha * vn
-            # 'algorithmic' stiffness matrix
-            # BE CAREFUL WITH THE EXPRESSION GIVEN BY BELYTSCHLO THAT WITH THE SPLITTING OF KINT
-            # VALID ONLY FOR LINEAR SYSTEM
-            # Here, we have evaluated the stiffness in unPAlpha, so we can use
-            # it directly
-            A = (1 + Alpha) * Kint + (Beta * Dt**2)**(-1) * M
-            # 'algorithmic' force residual
-            r = fint + inner(M, anP1) - ((1 + Alpha) * fextnP1 - Alpha * fextn)
-            if Damping:
-                # The damping force acts only on the dirichlet indices
-                # we add the damping force to the force residual
-                # we must use vnP1
-                r[fr] += inner(C, vnP1)[fr]
-                # modify corresponding term in dynamic stiffness matrix
-                # derived from sympy !!
-                # A += C*Gamma*(Alpha + 1)/(Beta*Dt)
-                A[ix_(fr, fr)] += C[ix_(fr, fr)] * Gamma / (Beta * Dt)
-            return r, A, fint, vnP1, anP1
-
-        if not LoadResults:
-            # handy in the case where u is not 0 at t = 0
-            un = np.copy(Wov._u)
-            """
-            # THE FOLLOWING CAUSES ERRORS!
-            unP1 = np.zeros(Wov._Ndofs, dtype = np.float32)
-            vn = np.zeros(Wov._Ndofs,  dtype = np.float32)
-            vnP1 = np.zeros(Wov._Ndofs,  dtype = np.float32)
-            an = np.zeros(Wov._Ndofs,  dtype = np.float32)
-            anP1 = np.zeros(Wov._Ndofs,  dtype = np.float32)
-            """
-            unP1 = np.zeros(Wov._Ndofs)
-            vn = np.zeros(Wov._Ndofs)
-            vnP1 = np.zeros(Wov._Ndofs)
-            an = np.zeros(Wov._Ndofs)
-            anP1 = np.zeros(Wov._Ndofs)
-
-            # compute initial acceleration
-            # surtout si on commence avec une position penetree !
-            (fextn, duG, di, fr, v, vimp) = self.Loading.getCurrentBCs(0, Wov._Ndofs)
-            # no duG at t = 0 !
-            # un[di] += duG[di]
-            vn[vimp] = v[vimp]
-            fint, Kint, M, C = Wov.getforce(un, a0, a1, updateC=updateC)
-            # VALID FOR v0 != 0
-            r = fextn - fint - inner(C, vn)
-            # estimation of the acceleration at t=0 (not mentionned in the book of Crieslielf but
-            # present in the one of Belytschko)
-            an[fr] = LA.solve(M[ix_(fr, fr)], r[fr])
-            self.CommitTS(0, 0, di, fr, un, vn, an, fint, fextn, Wov)
-
-            tn = 0
-            t = Dt
-
-        # we solve for displacements and pder at t(n + 1)
-        while t < tmax:
-            assert Dt > 0 and tn < t
-            # the 2 following expressions are constant during TS because based
-            # on previous converged TS only
-            uTilde = getuNP1Tilde()
-            vTilde = getvNP1Tilde()
-            # get the BCs for the current simulation time + the indices : di for dirichlet indices,
-            # fr for free ones
-            (fextnP1, duG, di, fr, v, vimp) = self.Loading.getCurrentBCs(
-                t, Wov._Ndofs, tn)
-            # estimate of the displacement at current time step n + 1
-            unP1[fr] = np.copy(uTilde)[fr]
-            vnP1[fr] = vTilde[fr]
-            DEL_u = zeros_like(un)
-            DEL_u[di] += duG[di]
-            # Approximation of the velocity at the dirichlet BCs
-            vnP1[di] = duG[di] * (Dt)**(-1)
-            vnP1[vimp] = v[vimp]
-            # force the velocity where needded
-            MaxPenet = 1 + self.MaxPenAllow
-            PenCt = 0
-            while MaxPenet > self.MaxPenAllow:
-                # iteration counter
-                ii = 0
-                res = 1 + self._tol
-                r, A, fint, vnP1, anP1 = get_r_A()
-                while res > self._tol:
-                    # solve for increment in displacements
-                    dufr = LA.solve(A[ix_(fr, fr)], -r[fr])
-                    # inf norm
-                    iN = LA.norm(dufr, np.inf)
-                    if iN > Wov._Yarns[0]._r:
-                        print ('dufr shrunk')
-                        # CAREFUL ONLY THE FREE INDICES MUST BE SHRUNK
-                        red = (iN) * (Wov._Yarns[0]._r)**(-1)
-                        if red <= 1:
-                            raise ValueError
-                        elif red > 10:
-                            self.FailureSignal()
-                            raise ValueError('du too important')
-                        dufr /= red
-                    DEL_u[fr] += dufr
-                    unP1 = un + DEL_u
-                    r, A, fint, vnP1, anP1 = get_r_A()
-                    # new convergence criterion from belytschko's book
-                    maxF = max(norm(fint), norm(fextnP1), norm(inner(M, anP1)))
-                    if maxF > 1e-8:
-                        res = norm(r[fr]) * maxF**(-1)
-                    else:
-                        res = norm(r[fr])
-                    ii += 1
-                    if ii > self.maxiter:
-                        self.FailureSignal()
-                        raise ValueError(
-                            'MaxNIter')
-
-                if self.PenReguAllowed:
-                    MaxPenet = Wov.CtcEL.PenaltyRegu(
-                        -self.MaxPenAllow, u=unP1, v=vnP1, a=anP1, fext=fextnP1, FEAss=Wov)
-                    PenCt += 1
-                    if PenCt > self.maxPiter:
-                        raise ValueError(
-                            'Maximum penetration remains too high')
-                else:
-                    MaxPenet = self.MaxPenAllow - 1
-            self.CommitTS(t, Dt, di, fr, unP1, vnP1, anP1, fint, fextnP1, Wov)
-            # update for next TS
-            un = np.copy(unP1)
-            vn = np.copy(vnP1)
-            an = np.copy(anP1)
-            fextn = np.copy(fextnP1)
-            tn = np.copy(t)
-
-            self.printConvTSMsg(t, ii)
-            # left in the end ON PURPOSE otherwise ew go over tmax and the BCs
-            # suddenly disappear !
-            t += Dt
-        self.SuccessSignal()
     ################################################################################
                               # NONLINEAR SOLVERS
     ################################################################################
@@ -926,7 +568,6 @@ class Solver():
 
 
         if self.FEM.HasConstraints:
-            set_trace()
             # will be used for storage
             # the last dict is to store kN or the values of the LM
             h_H = dict()
@@ -1045,6 +686,7 @@ class Solver():
     #
     #------------------------------------------------------------------------------
     def LoadTS(self, n):
+        self.step = n
         with open_file(self.pathfile, mode='r') as fileh:
             #dofs in displacement
             self.FEM.u =\
@@ -1055,6 +697,7 @@ class Solver():
 
             self.FEM.fext =\
                     fileh.root.TS.Results[n]['fext']
+
         if self.FEM.HasConstraints:
             Tab = self.FEM.ContactTable
             key = str(n)

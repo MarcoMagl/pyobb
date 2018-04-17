@@ -85,13 +85,16 @@ class ContactTable():
     #
     #------------------------------------------------------------------------------
     def set_parameter_weak_contact(self, nintegrationIntervals = np.array([1,1]) ,\
-            nxiGQP = 1 , nthetaGQP = 1, LM_per_ctct_el = 0):
+            nxiGQP = 1 , nthetaGQP = 1, LM_per_ctct_el = 0, n_cells_xi_per_slice = 1,
+            n_cells_theta_per_slice = 1):
         assert not self.is_set_parameter_weak_enforcement, 'already\
         set'
         assert nxiGQP >= 1
         assert nthetaGQP >= 1
         self.nxiGQP = nxiGQP
         self.nthetaGQP = nthetaGQP
+        self.n_cells_xi_per_slice = n_cells_xi_per_slice
+        self.n_cells_theta_per_slice = n_cells_theta_per_slice
         assert nintegrationIntervals.shape == (2,) and \
         np.all(nintegrationIntervals >= 1)
         self.nII = nintegrationIntervals
@@ -226,8 +229,6 @@ class ContactTable():
     def set_critical_penetration(self, critical_penetration):
         assert critical_penetration < 0
         self.critical_penetration = critical_penetration
-
-
 
     #------------------------------------------------------------------------------
     #
