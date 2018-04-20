@@ -428,6 +428,12 @@ class Model():
     #------------------------------------------------------------------------------
     def broad_phase(self,):
         for i in range(self.nCurves):
+            # TODO : beaucoup trop lent et couteux !! je pourrais faire un truc bien plus facile en
+            # prenant des points le long de la centroid line
+            # idee facile :
+            # 5 points le long de la centroid line.
+            # calucl distance, r = dmax + 0.5 * a et le centre de la sphere est pour
+            #
             self.box_lim[i,] =\
                          self.get_bounding_box_one_curve(\
                          self.el_per_curves[i],\
@@ -652,15 +658,8 @@ class Model():
                         array([0,2*np.pi])).reshape(-1,3)
                 obb_slave = build_obb(samp_slave)
                 bi = self.control_points(slave)
-                obb_slave =\
-                        build_obb_from_control_points(bi,
-                                0.5 * self.a_crossSec[slave])
+                obb_slave = build_obb(samp_slave)
 
-                self.plot_integration_interval(
-                        self.el_per_curves[slave],
-                        array([0, 1.]),
-                        array([0, 2 * np.pi]),
-                        opacity = 1., color = (0.,0.,0.) )
 
                 # master obb(s)
                 samp_on_master_candi =\
@@ -681,10 +680,22 @@ class Model():
                 # is there intersection between the OBB containing the whole slave curve and the
                 # master one ?
                 collision_obb = False
-                for obb_m in obb_master:
+                for uu, obb_m in enumerate(obb_master):
                     if collision_btw_obb(obb_m, obb_slave, eps = 1e-10):
                         collision_obb = True
 
+                        """
+                        self.plot_integration_interval(
+                            self.el_per_curves[slave],
+                            array([0, 1.]),
+                            array([0, 2 * np.pi]),
+                            opacity = 1., color = (0.,0.,0.) )
+                        scatter_3d( samp_on_master_candi[uu].reshape(-1,3), color = (1.,1.,1.))
+                        scatter_3d( samp_on_master_candi[uu].reshape(-1,3), color = (1.,1.,1.))
+                        plot_obb_vertices(obb_m, (1.,0.,0.))
+                        plot_obb_vertices(obb_slave, (0.,1.,0.))
+                        set_trace()
+                        """
 
                 if collision_obb:
                     # a closer look at the penetration is needed
@@ -703,16 +714,32 @@ class Model():
                                 ntheta_sampled,\
                                 Tab.xi_lim[ii],
                                 Tab.theta_lim[jj])
-                        obb_slv_II.append(OBB.build_from_points(samp_slv_II.reshape(-1,3)))
+                        obb_slv_II.append(build_obb(samp_slv_II.reshape(-1,3) ))
                         # get teh traid at the beginning of the interval
 
-
-                        for obb_m in obb_master:
+                        for uu, obb_m in enumerate(obb_master):
                             if collision_btw_obb(obb_slv_II[-1], obb_m):
                                 has_int_xi_lim.append(Tab.xi_lim[ii])
                                 has_int_theta_lim.append(Tab.theta_lim[jj])
 
-                    set_trace()
+                                # DO NOT DELETE THESE LINES
+                                """
+                                self.plot_integration_interval(
+                                    self.el_per_curves[slave],
+                                    Tab.xi_lim[ii],
+                                    Tab.theta_lim[jj],
+                                    opacity = 1., color = (0.,0.,0.) )
+
+                                plot_obb_vertices(obb_slv_II[-1]  , (0.,0.,0.))
+                                # build obb from convex hull to compare
+                                obb_hull = build_obb(samp_slv_II.reshape(-1,3), use_convex_hull = True)
+                                plot_obb_vertices(obb_hull  , (1.,0.,0.))
+                                scatter_3d( samp_on_master_candi[uu].reshape(-1,3), color = (1.,1.,1.))
+                                plot_obb_vertices(obb_m, (1.,1.,1.))
+                                set_trace()
+                                """
+
+
                     if len(has_int_xi_lim) == 0 or len(has_int_theta_lim) == 0 :
                         raise ValueError('No slave interval intersecting master curves has not been found')
 
@@ -843,8 +870,8 @@ class Model():
                         KSISol[ii] = hii
                         gNSol[ii] = gNii
                         IDM[ii] = int(current_curves[1])
-                    set_trace()
-                    self.plot_all_cells_centers_and_gap(current_curves[0], KSICii, KSISol, gNSol, IDM)
+
+                    #self.plot_all_cells_centers_and_gap(current_curves[0], KSICii, KSISol, gNSol, IDM)
 
 
             # was the slave already present in the contact list ?

@@ -477,7 +477,7 @@ def overlaps(int1, int2):
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def build_obb(pts, use_convex_hull = True):
+def build_obb(pts, use_convex_hull = False):
     if not pts.ndim == 2:
         pts = pts.reshape(-1,3)
     assert pts.shape[-1] == 3, '3D coordinates are expected'
@@ -506,9 +506,6 @@ def build_obb_from_control_points(bi, exp = 0.):
         obbi.min -= exp
         #plot_obb_vertices(obbi, color = (1., 1., 0.))
     return obbi
-
-
-
 
 
 
