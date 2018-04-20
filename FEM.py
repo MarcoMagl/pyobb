@@ -214,12 +214,13 @@ class Model():
         assert self.HasConstraints, 'Inconsistency: asked to set the contact table while the problem is without constraints'
 
         self.ContactTable =ContactTable(self.enforcement, method, **kwargs)
+
+        eps = 1e-6
+        self.ContactTable.critical_penetration = -np.min([(0.5-eps) * eli.b for eli in self.el])
+
         self.set_master_and_slaves_curves(kwargs["elements_per_curve"],\
                                           kwargs["master_curves_ids"],\
                                           kwargs["slave_curves_ids"])
-        self.ContactTable.set_critical_penetration(-np.min([0.5 *\
-            eli.b for eli in self.el]))
-
         if self.enforcement == 0 :
             self.is_set_penalty_options= 0
 
@@ -230,14 +231,11 @@ class Model():
                 LM_per_ctct_el = 1
             else:
                 LM_per_ctct_el =  kwargs['LM_per_ctct_el']
-            self.ContactTable.set_parameter_weak_contact(
-                                            kwargs["nintegrationIntervals"],\
-                                            kwargs["nxiGQP"],\
-                                            kwargs["nthetaGQP"],
-                                            LM_per_ctct_el)
 
         self.ContactTable.construct_storage_arrays()
         self.is_set_ContactTable = True
+
+        return self.ContactTable
 
     #------------------------------------------------------------------------------
     #
@@ -284,16 +282,20 @@ class Model():
         have already been set '
         assert elements_per_curves.shape == ( master_curves_ids.shape[0]+\
                 slave_curves_ids.shape[0], 2)
-        self.nCurves = master_curves_ids.shape[0]+\
-                slave_curves_ids.shape[0]
         self.el_per_curves = elements_per_curves
         self.nmaster_curves = master_curves_ids.shape[0]
         self.nslave_curves = slave_curves_ids.shape[0]
         self.master_curves_ids=master_curves_ids
         self.slave_curves_ids=slave_curves_ids
+
         assert np.intersect1d(master_curves_ids, slave_curves_ids,
                 assume_unique = True).shape[0] == 0
 
+        self.ContactTable.set_curve_to_curve_dynamic_table(\
+-           self.slave_curves_ids,
+            self.master_curves_ids)
+
+        self.nCurves = self.ContactTable.nCurves
         # the preallocation is made only once
         # coordinates of the limit of the bounding boxes
         self.box_lim = zeros((self.nCurves, 2, 3,), dtype = float)
@@ -307,13 +309,18 @@ class Model():
             self.nslave_curves), dtype = bool)
 
         self.is_set_master_and_slave_curves = True
-        self.ContactTable.set_curve_to_curve_dynamic_table(\
-            self.nCurves,\
--           self.slave_curves_ids, self.master_curves_ids, \
-            self.nmaster_curves, self.nslave_curves)
 
 
         # which curve belongs to which yarn
+        self.set_curves_per_yarn()
+        # initial check to ensure that we start from a C1 surface
+        self.CheckContinuitySurface()
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def set_curves_per_yarn(self):
+        assert not hasattr(self, 'curve_in_yarn'), 'attribute already set'
         self.curve_in_yarn = np.zeros(self.nCurves, dtype = int)
         Yi = 0
         for ii in range(self.nCurves-1):
@@ -330,8 +337,7 @@ class Model():
         else:
             self.curve_in_yarn[-1] = Yi + 1
 
-        # initial check to ensure that we start from a C1 surface
-        self.CheckContinuitySurface()
+
 
     #------------------------------------------------------------------------------
     #

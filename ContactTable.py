@@ -15,8 +15,10 @@ class ContactTable():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def __init__(self, enforcement,\
-            method, contact_type = 1,\
+    def __init__(self,
+            enforcement,\
+            method,
+            contact_type = 1,\
             gN_treshold_not_checked = 1.,\
             **kwargs):
 
@@ -25,7 +27,7 @@ class ContactTable():
         self.enforcement = enforcement
         assert "alpha" in kwargs.keys(), "a scalar\
         parameter is needed for the contruction of the\
-        splines "
+        smoothed geometry"
         self.smoothing = True
         self.smoothing_type = 'splines'
         assert "alpha" in kwargs.keys(), "a scalar\
@@ -84,48 +86,61 @@ class ContactTable():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def set_parameter_weak_contact(self, nintegrationIntervals = np.array([1,1]) ,\
-            nxiGQP = 1 , nthetaGQP = 1, LM_per_ctct_el = 0, n_cells_xi_per_slice = 1,
-            n_cells_theta_per_slice = 1):
+    def set_weak_contact_options(self,
+            ncells = np.array([1,1]) ,\
+            nxiGQP = 1 ,
+            nthetaGQP = 1,
+            **kwargs) :
+
+        assert self.contact_type == 1
         assert not self.is_set_parameter_weak_enforcement, 'already\
         set'
         assert nxiGQP >= 1
         assert nthetaGQP >= 1
+        # number of quadrature point per cell
         self.nxiGQP = nxiGQP
         self.nthetaGQP = nthetaGQP
-        self.n_cells_xi_per_slice = n_cells_xi_per_slice
-        self.n_cells_theta_per_slice = n_cells_theta_per_slice
-        assert nintegrationIntervals.shape == (2,) and \
-        np.all(nintegrationIntervals >= 1)
-        self.nII = nintegrationIntervals
+        assert ncells.shape == (2,) and \
+        np.all(ncells >= 1)
+        self.ncells = ncells
+
+        # generate coordinates of the cells vertices (in parent coordinates)
+        xi_lim = np.linspace(0, 1, self.ncells[0] + 1)
+        theta_lim = np.linspace(0, 2 * np.pi, self.ncells[1] + 1)
+        if self.ncells[0] == 1:
+            self.xi_cells = array([xi_lim])
+        else:
+            self.xi_lim =  np.vstack((xi_lim[:-1], xi_lim[1:])).T
+
+        if self.ncells[1] == 1:
+            self.theta_lim= array([theta_lim])
+        else:
+            self.theta_lim =  np.vstack((theta_lim[:-1],
+                theta_lim[1:])).T
         self.is_set_parameter_weak_enforcement = True
 
-        if self.enforcement == 1:
-            self.LM_per_ctct_el = LM_per_ctct_el
 
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def set_curve_to_curve_dynamic_table(self, ncurves,\
-            slave_curves_ids, master_curves_ids, nmaster_curves,
-            nslave_curves):
+    def set_curve_to_curve_dynamic_table(self,
+            slave_curves_ids,
+            master_curves_ids):
         """
         creation of the arrays necessary for the storing of the
         information for contact between beams
         """
-        self.ncurves = ncurves
-        self.pairs_to_check= np.zeros( ( ncurves,
-            ncurves), dtype = bool)
-        self.close_curves = np.zeros( ( ncurves,
-            ncurves), dtype = bool)
         self.nmaster_curves = len(master_curves_ids)
         self.nslave_curves = len(slave_curves_ids)
+        self.nCurves = self.nmaster_curves + self.nslave_curves
+        self.pairs_to_check= np.zeros( ( self.nCurves, self.nCurves), dtype = bool)
+        self.close_curves = np.zeros( self.pairs_to_check.shape , dtype = bool)
 
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
     def construct_storage_arrays(self):
-        ncurves = self.ncurves
+        ncurves = self.nCurves
         if self.contact_type == 0 :
             self.h = np.nan * np.ones(self.close_curves.shape +\
                     (6,), dtype = float)
@@ -139,96 +154,81 @@ class ContactTable():
             else:
                 raise NotImplementedError
         else:
-            assert self.is_set_parameter_weak_enforcement
-
-            xi_lim = np.linspace(0, 1, self.nII[0] + 1)
-            theta_lim = np.linspace(0, 2 * np.pi, self.nII[1] + 1)
-            if self.nII[0] == 1:
-                self.xi_lim= array([xi_lim])
-            else:
-                self.xi_lim =  np.vstack((xi_lim[:-1], xi_lim[1:])).T
-
-            if self.nII[1] == 1:
-                self.theta_lim= array([theta_lim])
-            else:
-                self.theta_lim =  np.vstack((theta_lim[:-1],
-                    theta_lim[1:])).T
-
-
-            # https://stackoverflow.com/questions/29839350/numpy-append-vs-python-append
-            # way faster to deal with list and convert to np.array if needed
-
-            """
-            # list of int
-            self.ID_slave = np.array([], dtype = int)
-            # list of list of int
-            self.ID_master= np.array([], dtype = int)
-            # list of np.array of dim GP_xi * GP_theta
-            self.gN =  np.array([], dtype = float)
-            # list of array of dim dim GP_xi * GP_thetal * 4
-            self.h = np.array([],  dtype = float)
-            # list of array of dim dim GP_xi * GP_theta
-            self.wGP = np.array([],  dtype = float)
-            # list of bool
-            self.active_set = np.array([], dtype = np.bool)
-            """
             for attr in 'ID_slave ID_master ID_master_Ctr gN \
                     active_cells KSI_Cells CON_Cells hCtr h active_set'.split(' '):
                 setattr(self, attr, [])
-            """
-            # list of int
-            self.ID_slave = []
-            # list of list of int
-            self.ID_master= []
-            # list of np.array of dim GP_xi * GP_theta
-            self.gN = []
-            # list of array of dim dim GP_xi * GP_thetal * 4
-            self.h = []
-            self.active_cells = []
-            """
+
 
             if self.enforcement == 1:
                 # list of array of dim Nctc * nLM_per_ctc
                 self.LM =  [] #np.array([], dtype = float)
                 # list of array of dim Nctc * nLM_per_ctc
                 self.dofs_LM = np.array([], dtype = int)
+                self.weak_enforcement= np.array([], dtype = float)
+                self.weak_constraint= np.array([], dtype = float)
             elif self.enforcement == 0:
+                # one penalty stiffness per cell
                 self.kN =  [] # np.array([], dtype = float)
             else:
                 raise NotImplementedError
 
-            # list of float
-            self.weak_enforcement= np.array([], dtype = float)
-            self.weak_constraint= np.array([], dtype = float)
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
     def set_penalty_options(self,
             method_regularization,
             maxPenAllow,
-            kNmin, coeff_mul) :
-        assert maxPenAllow < 0
-        self.maxPenAllow = maxPenAllow
-        assert self.enforcement == 0, 'Only for penalty like method'
-        assert method_regularization == 0 or method_regularization == 1
+            kNmin,
+            coeff_mul) :
+
+        # different method implemented to adapt the penalty stiffness
         self.method_regularization = method_regularization
-        assert isinstance(maxPenAllow, float) and maxPenAllow<0
         self.maxPenAllow = maxPenAllow
-        # coeff_mul can have 2 different uses: whether it is the constant value that mutliply wach
-        # time the stiffness of the penalty springs or, it is used to ensure that there is some
-        # minimum increase of the penalty stiffness when a more elaborate regularization is used
-        assert coeff_mul > 1, 'One must increase the stiffness of the penalty springs. Hence\
-            must be >1'
-        self.Multiplier_Pen = coeff_mul
+        # value used for the regularization
+        self.coeff_mul = coeff_mul
         self.kNmin = kNmin
+
+        assert self.enforcement == 0, 'Only for penalty like method'
+        assert isinstance(maxPenAllow, float) and maxPenAllow<0
+        assert self.maxPenAllow < 0
+        assert self.coeff_mul > 1, 'One must increase the stiffness of the penalty springs. Hence\
+            must be >1'
 
 
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def set_critical_penetration(self, critical_penetration):
-        assert critical_penetration < 0
-        self.critical_penetration = critical_penetration
+    @property
+    def critical_penetration(self):
+        return self._critical_penetration
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    @critical_penetration.setter
+    def critical_penetration(self, value):
+        assert value < 0
+        # without underscore infiinte number of recursion
+        self._critical_penetration =  value
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    @property
+    def epsilon(self):
+        # the gap is measured at the center of a cell in the curved space of the surface of the
+        # cruve. If this gap is above epsilon, the contact won't be checked fir this cell during the
+        # increment
+        assert self.value_epsilon_set, 'value of epsilon not set'
+        return self._epsilon
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    @epsilon.setter
+    def epsilon(self, value):
+        assert value > 0
+        self.value_epsilon_set = True
+        # without underscore infiinte number of recursion
+        self._epsilon = value
 
     #------------------------------------------------------------------------------
     #
@@ -310,6 +310,7 @@ class ContactTable():
             getattr(self, arr)[id_c_slave] =\
             np.delete(getattr(self, arr)[id_c_slave], idx, axis = 0)
         assert len(self.active_cells[id_c_slave] ) == len(new_active_cells)
+
 
     #------------------------------------------------------------------------------
     #
@@ -450,23 +451,6 @@ class ContactTable():
         'relative increase of the penalty stiffness too important'
 
         return IsCorrectPenStiff
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    @property
-    def epsilon(self):
-        assert self.value_epsilon_set, 'value of epsilon not set'
-        return self._epsilon
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    @epsilon.setter
-    def epsilon(self, value):
-        assert value > 0
-        self.value_epsilon_set = True
-        # without underscore infiinte number of recursion
-        self._epsilon = value
 
     #------------------------------------------------------------------------------
     #
