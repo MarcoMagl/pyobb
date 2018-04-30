@@ -22,6 +22,7 @@ import\
 Extension.RoutinesGeoExactBeams.Smoothing2NVectInterp.Common.SmoothedGeo as GeoSmooth
 from Extension.RoutinesGeoExactBeams.Smoothing2NVectInterp.weakIneqConstraint.RigidSphere import ctcVolumeSphere
 from Extension.RoutinesGeoExactBeams.Smoothing2NVectInterp.weakIneqConstraint.BeamToBeam import ctcVolumeBtoB
+from Common import Utilities
 from Common.Utilities import *
 import matplotlib.pylab as plt
 from Common.ContactTable import ContactTable
@@ -33,7 +34,6 @@ from Common.UserDefErrors import *
 from joblib import Parallel, delayed
 from joblib.pool import has_shareable_memory
 import multiprocessing
-from Common.cython_ext import narrow_phase
 
 #------------------------------------------------------------------------------
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -298,7 +298,7 @@ class Model():
         self.nCurves = self.ContactTable.nCurves
         # the preallocation is made only once
         # coordinates of the limit of the bounding boxes
-        self.box_lim = zeros((self.nCurves, 2, 3,), dtype = float)
+        self.aabb_vrtx = zeros((self.nCurves, 2, 3,), dtype = float)
         # center of the enclosing sphere (enclosing the bounding box)
         self.ctr_box = zeros((self.nCurves, 3), dtype = float)
         # radius
@@ -433,45 +433,69 @@ class Model():
     #
     #------------------------------------------------------------------------------
     def broad_phase(self,):
-        for i in range(self.nCurves):
-            # TODO : beaucoup trop lent et couteux !! je pourrais faire un truc bien plus facile en
-            # prenant des points le long de la centroid line
-            # idee facile :
-            # 5 points le long de la centroid line.
-            # calucl distance, r = dmax + 0.5 * a et le centre de la sphere est pour
-            #
-            self.box_lim[i,] =\
-                         self.get_bounding_box_one_curve(\
-                         self.el_per_curves[i],\
-                         nxi=10,\
-                         ntheta = 10)
-            # in the middle of the diagonal of the box
-            self.ctr_box[i] = 0.5 * (self.box_lim[i,0]+self.box_lim[i,1])
-            # from the center to a vertex
-            self.r_sphbox[i] = norm(self.box_lim[i,0]-self.ctr_box[i])
-            """
-            plot_sphere(self.ctr_box[i],\
-                    self.r_sphbox[i],
-                    color = tuple(np.random.rand(3)),
-                    opacity = 0.1)
-            """
 
-        Tab = self.ContactTable
-        # check intersection of the bounding shperes
-        # this will determine which curves will be checked for contact
-        # during one step
+
+        Tab= self.ContactTable
+        self.generate_surface_grid_all_curves()
+        AS_CORRECT = True
+        cells_intersec = dict(id_s = [],
+                id_m = [],
+                id_cells = [])
+
+        # construct recursive AABB intersection
         for ii in self.slave_curves_ids:
             for jj in self.master_curves_ids:
-                if (norm(self.ctr_box[ii] - self.ctr_box[jj]) -\
-                        (self.r_sphbox[ii] + self.r_sphbox[jj])) < 1e-10:
-                    # the enclosing spheres are close enough
-                    # closer look at the bounding boxes to see if they are intersecting
-                    bYMii = self.box_lim[ii]
-                    bYSjj = self.box_lim[jj]
-                    Tab.close_curves[ii, jj] =\
-                    collision_AABB(bYMii, bYSjj, eps = 0.05 * self.r_sphbox[i] )
+                cells_collide, id_cells =\
+                        Utilities.recursive_AABB(Tab.ncells,
+                                self.grid_surf_points[ii],
+                                self.grid_surf_points[jj],
+                                Tab.cell_connectivity,
+                                Tab.grid_cell)
+
+                if cells_collide:
+                    cells_intersec['id_s'].append(ii)
+                    cells_intersec['id_m'].append(jj)
+                    assert id_cells.ndim == 2 and id_cells.shape[1] == 2
+                    cells_intersec['id_cells'].append(id_cells)
+        return cells_intersec
 
 
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def recursive_AABB(self, ii, jj, AS_Correct):
+        Tab = self.ContactTable
+        m, n = Tab.ncells # n of cells in xi and theta dir.
+        div_xi, div_theta = (1, 1)
+        chunks_ii
+        END = False
+        ct = 0
+        while not END :
+            AABBs_ii  = self.chunk_cells_and_get_AABBs(ii, div_xi, div_theta)
+            AABBs_jj = self.chunk_cells_and_get_AABBs(jj, div_xi, div_theta)
+            if not collision_AABB(aabb1, aabb2, eps = 1e-6):
+                END = True
+            else:
+                if div_xi < m : div_xi += 1
+                if div_theta < m : div_theta += 1
+                if (div_xi == m) and (div_theta == n) :
+                    self.narrow_phase_cells(ii, jj , check_if_contact_missed = AS_Correct )
+                    # expl : if we already know that the contact set is wrong, useless to
+                    # compare list of active cells (current and stored)
+                    END = True
+
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def generate_surface_grid_all_curves(self):
+        # construct slave obb around entire slave curve
+        Tab = self.ContactTable
+        self.grid_surf_points = zeros((self.nCurves, Tab.ncells[0] + 1, Tab.ncells[1] + 1 , 3 ), dtype = float)
+        for i in range(self.nCurves):
+            self.grid_surf_points[i] = self.get_cell_vertices_coord(i)
 
     #------------------------------------------------------------------------------
     #
@@ -482,11 +506,10 @@ class Model():
         """
         if not self.is_set_ContactTable:
             raise ValueError('The contact table must be set! Use set_Contact_Table method ')
-        Tab = self.ContactTable
         # ABB intersection
-        self.broad_phase()
+        cells_intersect = self.broad_phase()
         # return bool: true if AS was correct
-        return self.narrow_phase(stp)
+        return self.narrow_phase(cells_intersect)
 
     #------------------------------------------------------------------------------
     #
@@ -531,108 +554,25 @@ class Model():
             mlab.text3d(x,y,z,str(scurve_id),scale=0.1)
             set_trace()
         """
+
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def narrow_phase(self, stp):
-        """
-        #for pair in np.argwhere(Tab.close_curves):
-        #in_parallel = (self.nCurves > 20)
-        in_parallel = True
-        if not in_parallel:
-            [self.narrow_phase_for_a_curve_pair(pair) for pair in np.argwhere(Tab.close_curves)]
-        else:
-            num_cores = multiprocessing.cpu_count()
-            Parallel(n_jobs=num_cores)(delayed(has_shareable_memory)(self.narrow_phase_for_a_curve_pair(pair))\
-                    for pair in np.argwhere(Tab.close_curves))
-        """
-
-        def plot_problematic_area():
-            """
-            useful to debug
-            """
-            id_els = self.el_per_curves[(current_curves,)].ravel()
-
-            xmstr =\
-            self.get_surf_point_smoothed_geo(\
-                    id_els[(2,3),],
-                    asarray(hSol))
-
-            xFG =\
-            self.get_surf_point_smoothed_geo(\
-                    id_els[(2,3),],
-                    hFG)
-            for cloud in samp_on_master_candi:
-                scatter_3d(cloud.reshape(-1,3), color = tuple(np.random.rand(3)), scale_factor
-                        = 1/100)
-
-            self.plot_integration_interval(id_els[(0,1),],\
-                    xi_lim_slv,
-                    theta_lim_slv,
-                    opacity = 1., color = (0.,0.,0.) )
-
-            self.plot_integration_interval(id_els[(2,3),],\
-                    xi_lim_mstr,
-                    theta_lim_mstr,
-                    opacity = 1.,
-                    color = (0., 1.,0.))
-
-            mlab.points3d(\
-                    xFG[0], xFG[1], xFG[2], color = (1.,0.,0.),\
-                    scale_factor = 0.01, name = 'FG')
-            mlab.points3d(\
-                    samp_on_master_candi[(idx_min)][0],
-                    samp_on_master_candi[(idx_min)][1],
-                    samp_on_master_candi[(idx_min)][2],
-                    color = (1.,0.,0.),\
-                    scale_factor = 0.01, name = 'from arr')
-
-            """
-            mlab.points3d(\
-                    samp_on_master_candi[0,3,:][:,0],
-                    samp_on_master_candi[0,3,:][:,1],
-                    samp_on_master_candi[0,3,:][:,2],
-                    color = (1.,0.,0.),\
-                    scale_factor = 0.01, name = 'xi = 0.1')
-            """
-
-            mlab.points3d(\
-                    xmstr[0], xmstr[1], xmstr[2], color = (0.,1.,0.),\
-                    scale_factor = 0.01, name = 'sol on mstr' )
-
-            mlab.points3d(\
-                    xGQP[0], xGQP[1], xGQP[2], color = (1.,1.,1.),\
-                    scale_factor = 0.01, name = 'pos GQP')
-
-
+    def narrow_phase(self, cells_intersect ):
         Tab = self.ContactTable
-        # arrays created just to validate cython implementation
-        nxiGQP = Tab.nxiGQP
-        nthetaGQP= Tab.nthetaGQP
+        current_active_slave = array(Tab.active_set)
+        # for the time being all the cells have the smae number of integration point
+        nxiGQP, nthetaGQP = Tab.nxiGQP, Tab.nthetaGQP
         nuxiGQP, WnuxiGQP =  np.polynomial.legendre.leggauss(nxiGQP)
-        nuthetaGQP, WnuthetaGQP =\
-        np.polynomial.legendre.leggauss(nthetaGQP)
-        nxi_sampled = 20
-        ntheta_sampled = 20
-        # the master curve has no integration interval
-        xi_lim_mstr = array([0,1])
-        theta_lim_mstr = array([0, 2 * np.pi])
-        # always the same
-        xi_mstr = np.linspace(xi_lim_mstr[0],\
-                xi_lim_mstr[1],\
-                nxi_sampled)
-        theta_mstr = np.linspace(theta_lim_mstr[0],\
-                theta_lim_mstr[1],\
-                ntheta_sampled)
+        nuthetaGQP, WnuthetaGQP = np.polynomial.legendre.leggauss(nthetaGQP)
 
-        AS_modified = False
+        AS_correct = True
 
-        for slave in self.slave_curves_ids:
-            master_close = np.where(Tab.close_curves[slave])
+        for ii, slave in enumerate(cells_intersect['id_s']):
+            master_close = cells_intersect['id_m'][ii]
             is_active_slave, idx_in_AS = Tab.query_is_active_slave(slave)
             nmclose = len(master_close[0])
-
-            check_penetration_cells = False
+            set_trace()
 
             if is_active_slave and nmclose == 0:
                 if np.all(Tab.gN[idx_in_AS]) > 0:
@@ -646,7 +586,7 @@ class Model():
                             array([0, 1.]),
                             array([0, 2 * np.pi]),
                             opacity = 1., color = (0.,0.,0.) )
-                    plot_AABB(self.box_lim[slave])
+                    plot_AABB(self.aabb_vrtx[slave])
                     set_trace()
                     raise ValueError('sudden loss of contact not allowed')
 
@@ -928,7 +868,7 @@ class Model():
             else:
                 if is_active_slave:
                     raise ValueError('the element was active but all of its cells for deactivated at once. Dangerous')
-        return not AS_modified
+        return AS_correct
 
 
     #------------------------------------------------------------------------------
@@ -1119,7 +1059,7 @@ class Model():
             diff_color_each_element = True,\
             color=(0.6, 0.6, 0.6),\
             opacity = 1., \
-            nS = 10,\
+            nxi = 10,\
             ntheta = 20,\
             useYarnConnectivity = False,
             manage_rendering = False,
@@ -1152,7 +1092,7 @@ class Model():
                 pos = eli.get_mesh_surface_points(
                                 self.X[eli.nID],  self.u[eli.nID],
                                 self.v[eli.nID],
-                                nS=nS, ntheta=ntheta)
+                                nxi=nxi, ntheta=ntheta)
 
                 x,y,z = (pos[:,:,i] for i in range(3))
                 if not hasattr(self.el[ii], 'ms'):
@@ -1184,7 +1124,7 @@ class Model():
                 POS = np.vstack([ self.el[jj].get_mesh_surface_points(
                         self.X[self.el[jj].nID],  self.u[self.el[jj].nID],
                         self.v[self.el[jj].nID],
-                        nS=nS, ntheta=ntheta) for jj in eliYi])
+                        nxi=nxi, ntheta=ntheta) for jj in eliYi])
 
                 if not UPDATE:
                     #construct the vtk object
@@ -1387,7 +1327,7 @@ class Model():
             diff_color_each_element = True,\
             color=(1.,1.,0.),\
             opacity = 0.7, \
-            nS = 10,\
+            nxi = 10,\
             ntheta = 15):
 
         assert self.is_set_package_plot, 'package plot must be set as well as the axis'
@@ -1402,7 +1342,7 @@ class Model():
             pos = eli.get_mesh_surface_points(
                             self.X[eli.nID],  self.u[eli.nID],
                             self.v[eli.nID],
-                            nS=nS, ntheta=ntheta)
+                            nxi=nxi, ntheta=ntheta)
 
             x,y,z = (pos[:,:,i] for i in range(3))
             eli.mesh =mlab.mesh(x, y, z, color=eli.color_surface_mayavi, opacity=opacity)
@@ -1445,10 +1385,10 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def plot_one_smoothed_surface(self, id_els, nS=10, ntheta=10,
+    def plot_one_smoothed_surface(self, id_els, nxi=10, ntheta=10,
             color=(1.,0.,0.), opacity = 0.5):
 
-        pos = self.sample_surf_point_on_smooth_geo(id_els, nS,
+        pos = self.sample_surf_point_on_smooth_geo(id_els, nxi,
                 ntheta,\
                 xi_lim = array([0,1]),\
                 theta_lim = array([0, 2 * np.pi]))
@@ -1461,7 +1401,7 @@ class Model():
             id_slv, id_mstr, xi_lim_slv, theta_lim_slv,\
             xi_lim_mstr = array([0, 1]),\
             theta_lim_mstr = array([0, 2 * np.pi]),\
-            nS=10, ntheta=10,\
+            nxi=10, ntheta=10,\
             color_sl=(1.,0.,0.), \
             color_mstr = (0.,1.,0.),\
             opacity = 0.5):
@@ -1482,9 +1422,9 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def plot_integration_interval(self, id_els, xi_lim, theta_lim,  nS=10, ntheta=20,
+    def plot_integration_interval(self, id_els, xi_lim, theta_lim,  nxi=10, ntheta=20,
             color=(1.,0.,0.), opacity = 0.5):
-        pos = self.sample_surf_point_on_smooth_geo(id_els, nS,
+        pos = self.sample_surf_point_on_smooth_geo(id_els, nxi,
                 ntheta,\
                 xi_lim = xi_lim,\
                 theta_lim = theta_lim)
@@ -1552,14 +1492,14 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def plot_Surface_set_of_element(self, index_elements, color = (0.,0.,0.), nS = 10, ntheta = 20):
+    def plot_Surface_set_of_element(self, index_elements, color = (0.,0.,0.), nxi = 10, ntheta = 20):
         """
         handy method that allow to control which elements are plotted.
         ideal to plot yarns for example
         """
         for ii in index_elements:
             self.el[ii].plotSurface(self.X[self.el[ii].nID], self.u[self.el[ii].nID],
-                                       self.v[self.el[ii].nID], nS , ntheta )
+                                       self.v[self.el[ii].nID], nxi , ntheta )
 
 
     #------------------------------------------------------------------------------
@@ -1660,7 +1600,7 @@ class Model():
             diff_color_each_element = True,\
             color=(0.6, 0.6, 0.6),\
             opacity = 1., \
-            nS = 10,\
+            nxi = 10,\
             ntheta = 20,\
             size = (1080, 720),
             lock_camera = True):
@@ -1709,7 +1649,7 @@ class Model():
                             diff_color_each_element = diff_color_each_element,\
                             color=color,\
                             opacity = opacity, \
-                            nS = nS,\
+                            nxi = nxi,\
                             ntheta = ntheta,
                             manage_rendering = False,
                             lock_camera = lock_camera)
@@ -1745,7 +1685,7 @@ class Model():
                                     diff_color_each_element = diff_color_each_element,\
                                     color=color,\
                                     opacity = opacity, \
-                                    nS = nS,\
+                                    nxi = nxi,\
                                     ntheta = ntheta)
                         n += plotevery
                         yield
@@ -1780,7 +1720,7 @@ class Model():
             diff_color_each_element = True,\
             color=(0.6, 0.6, 0.6),\
             opacity = 1., \
-            nS = 10,\
+            nxi = 10,\
             ntheta = 20,\
             lock_camera = True):
 
@@ -1816,7 +1756,7 @@ class Model():
                             diff_color_each_element = diff_color_each_element,\
                             color=color,\
                             opacity = opacity, \
-                            nS = nS,\
+                            nxi = nxi,\
                             ntheta = ntheta,
                             manage_rendering = False,
                             lock_camera = lock_camera)
@@ -2039,14 +1979,14 @@ class Model():
     #
     #------------------------------------------------------------------------------
     def sample_surf_point_on_smooth_geo(self,\
-            id_els, nS, ntheta,\
+            id_els, nxi, ntheta,\
             xi_lim, theta_lim):
         # version with for loops in full C
         assert id_els.shape == (2,)
         assert xi_lim.shape == (2,)
         assert theta_lim.shape == (2,)
         nd_C =  self.nPerEl[id_els,].flatten()[(0,1,3),]
-        pos = zeros((nS, ntheta, 3), dtype = np.double)
+        pos = zeros((nxi, ntheta, 3), dtype = np.double)
         GeoSmooth.samplePointsOnSurface(\
             self.X[nd_C,].ravel(),\
             self.u[nd_C,].ravel(),\
@@ -2056,7 +1996,7 @@ class Model():
             self.a_crossSec[id_els][0],\
             self.b_crossSec[id_els][0],\
             self.ContactTable.alpha,\
-            np.linspace(xi_lim[0], xi_lim[1], nS, dtype=float),\
+            np.linspace(xi_lim[0], xi_lim[1], nxi, dtype=float),\
             np.linspace(theta_lim[0], theta_lim[1], ntheta, dtype =float),\
             pos)
         return pos
@@ -2064,20 +2004,45 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
+    def get_cell_vertices_coord(self, id_c):
+        Tab = self.ContactTable
+        id_els = self.el_per_curves[id_c]
+        nd_C =  self.nPerEl[id_els,].flatten()[(0,1,3),]
+        pos = zeros((Tab.xi_vert.shape[0] ,\
+                Tab.theta_vert.shape[0] , 3), dtype = np.double)
+
+        GeoSmooth.samplePointsOnSurface(\
+            self.X[nd_C,].ravel(),\
+            self.u[nd_C,].ravel(),\
+            self.v[nd_C,].ravel(),\
+            self.t1[id_els,],\
+            self.t2[id_els,],\
+            self.a_crossSec[id_els][0],\
+            self.b_crossSec[id_els][0],\
+            self.ContactTable.alpha,\
+            Tab.xi_vert,# xis and thetas already computed
+            Tab.theta_vert,
+            pos)
+        return pos
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
     def sample_point_centroid(self,\
-            id_els, nS,\
+            id_els, nxi,\
             xi_lim):
         # version with for loops in full C
         assert id_els.shape == (2,)
         assert xi_lim.shape == (2,)
 
         nd_C =  self.nPerEl[id_els,].flatten()[(0,1,3),]
-        pos = zeros((nS, 3), dtype = np.double)
+        pos = zeros((nxi, 3), dtype = np.double)
         GeoSmooth.samplePointsOnCentroid(\
             self.X[nd_C,].ravel(),\
             self.u[nd_C,].ravel(),\
             self.ContactTable.alpha,\
-            np.linspace(xi_lim[0], xi_lim[1], nS, dtype=float),\
+            np.linspace(xi_lim[0], xi_lim[1], nxi, dtype=float),\
             pos)
         return pos
 
@@ -3291,7 +3256,7 @@ class Model():
         betaFG= array([grid[0][idx], grid[1][idx]])
         beta1FG = betaFG[0]
         beta2FG = betaFG[1]
-        PtFG = self.Sphere.getPointOnSurface(beta1FG, beta2FG)
+        PtFG = self.Sphere.getPointOnxiurface(beta1FG, beta2FG)
         BetaFG = array([ beta1FG,  beta2FG])
 
         (BetaSol, f, K, gN, ExitCode, ContriGQP) =\

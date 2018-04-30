@@ -293,65 +293,6 @@ def get_linear_transfo_between_tgt_spaces_of_SO3(Psi) :
         return T
 
 
-#------------------------------------------------------------------------------
-#
-#-----------------------------------------------------------------------------
-def collision_AABB(blim1, blim2, eps = 0):
-    """
-    Check Collision of 2 Bounding Boxes
-    #  ________
-    # |\       |\
-    # |_\______|_\
-    # \ |      \ |
-    #  \|_______\|
-    #
-    #
-    """
-    for blim in [blim1, blim2]:
-       assert blim.shape== (2,3)
-       assert np.all(blim[0] < blim[1]), 'first line should be\
-       minimums while second line should correspond to maximums'
-
-    xmin_1, ymin_1, zmin_1, xmax_1, ymax_1, zmax_1 = blim1.flatten()
-    xmin_2, ymin_2, zmin_2, xmax_2, ymax_2, zmax_2 = blim2.flatten()
-
-    """
-    from mayavi import mlab
-    mlab.points3d([xmin_1, xmin_2],[ymin_1, ymin_2], [zmin_1, zmin_2],
-            color = (1.,0.,0.), scale_factor = 0.1)
-    mlab.points3d([xmax_1, xmax_2],[ymax_1, ymax_2], [zmax_1, zmax_2],
-            color = (0.,1.,0.), scale_factor = 0.1)
-    """
-    # www.miguelcasillas.com/?p=30
-    return (xmax_1 >= xmin_2 - eps) and\
-            (xmin_1 <= xmax_2 + eps) and\
-            (ymax_1 >= ymin_2 -eps) and\
-            (ymin_1 <= ymax_2+eps) and\
-            (zmax_1 >= zmin_2-eps) and\
-            (zmin_1 <= zmax_2+eps)
-
-
-#------------------------------------------------------------------------------
-#
-#-----------------------------------------------------------------------------
-def plot_AABB(blim):
-   assert blim.shape== (2,3)
-   coord = np.array([ci for ci in itertools.product(blim[:,0], blim[:,1], blim[:,2]) ])
-   mlab.points3d(coord[:, 0],
-           coord[:,1],
-           coord[:, 2],
-        color = (0.,1.,0.),
-        mode = 'point')
-
-
-#------------------------------------------------------------------------------
-#
-#-----------------------------------------------------------------------------
-def is_point_in_AABB(blim, Pt):
-    xmin, ymin, zmin, xmax, ymax, zmax = blim.flatten()
-    return (xmin <= Pt[0] <= xmax) and\
-    (ymin <= Pt[1] <= ymax) and\
-    (zmin <= Pt[2] <= zmax)
 
 
 #------------------------------------------------------------------------------
@@ -429,15 +370,6 @@ def scatter_3d(coords, color = (1.,0.,0.),\
             mode = 'point')
 
 
-#------------------------------------------------------------------------------
-#
-#-----------------------------------------------------------------------------
-def getAABBLim(X):
-    assert X.ndim == 2 and X.shape[1] == 3
-    return array([ np.min(X , axis = 0),\
-            np.max(X, axis = 0)] )
-
-
 
 
 #------------------------------------------------------------------------------
@@ -506,8 +438,6 @@ def build_obb_from_control_points(bi, exp = 0.):
         obbi.min -= exp
         #plot_obb_vertices(obbi, color = (1., 1., 0.))
     return obbi
-
-
 
 
 
@@ -614,55 +544,58 @@ def plot_obb_vertices(obb, color =  (1.,1.,1.) ):
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def generation_grid_quadri_and_connectivity(X, Y, nx, ny):
+def generation_grid_quadri_and_connectivity(X, Y, Nx, Ny):
     """
     X : lim of the grid in the first direction
     Y : lim of the grid in the second direction
-    nx : number of points in the first direction
-    ny : number of points in the secind direction
+    Nx : number of cells wanted along first axis
+    Ny : number of cells wanted along second axis
     """
-    assert len(X) == 2
-    assert len(Y) == 2
+    assert Nx > 0
+    assert Ny > 0
+    nx = Nx + 1
+    ny = Ny + 1
     x = np.linspace(X[0], X[1], nx)
     y = np.linspace(Y[0], Y[1], ny)
     grid = np.meshgrid(x,y)
-    C = array([grid[0].ravel(), grid[1].ravel()]).T
     nID = np.arange(np.product(grid[0].shape)).reshape(grid[0].shape)
-    Nx = nx - 1
-    Ny = ny - 1
+    grid_cell = np.arange(Nx * Ny).reshape(Nx, Ny)
 
     Con = zeros((Nx * Ny, 4), dtype = int)
     Con[:,0] = nID[:-1, :-1].ravel()
     Con[:,1] = nID[:-1, 1:].ravel()
     Con[:,2] = nID[1:, 1:].ravel()
     Con[:,3] = nID[1:, :-1].ravel()
+    # unravel the indices to keep the structure
+    ConUnrav = array(np.unravel_index(Con, grid[0].shape ))
 
-    return C, Con
+    #plot_cells_regular_grid(grid , ConUnrav, In2D = True)
+
+    return grid, ConUnrav, grid_cell
 
 
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def plot_cells_regular_grid(X, con, In2D = False):
+def plot_cells_regular_grid(grid, Con, In2D = False):
     """
-    designed to work with generation_grid_quadri_and_connectivity
+    designed to work with generation_grid_quadri_and_Connectivity
     """
     if In2D:
         import matplotlib.pylab as plt
     plt.close('all')
-    ncel = con.shape[0]
+    ncel = Con[0].shape[0]
+
     for i in range(ncel):
-        conCell = con[i]
-        xCell = X[(con[i][0],
-                con[i][1],
-                con[i][2],
-                con[i][3],
-                con[i][0]),]
-        xCenter = 0.5 * (X[con[i][0]] + X[con[i][2]])
+        xCell = getCellVertices(i, grid, Con)
+        # to close the polygon
+        xCell = np.vstack([xCell, xCell[0]])
+        xCenter = 0.5 * (xCell[0] + xCell[2])
         if In2D:
             plt.plot(xCell[:,0],
                     xCell[:,1])
             plt.scatter(xCenter[0], xCenter[1])
+            plt.text(xCenter[0], xCenter[1], str(i))
         else:
             mlab.plot3d(xCell[:,0],
                     xCell[:,1],
@@ -670,11 +603,18 @@ def plot_cells_regular_grid(X, con, In2D = False):
             mlab.points3d(xCenter[0], xCenter[1],xCenter[1])
     if In2D: plt.pause(1e-5)
 
+
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
+def getCellVertices(idx_cell, grid, Con):
+    ii = Con[0][idx_cell[0]]
+    jj = Con[1][idx_cell[1]]
+    return grid[ii,jj]
 
-
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
 def chunkIt(seq, num):
     avg = len(seq) / float(num)
     out = []
@@ -686,7 +626,163 @@ def chunkIt(seq, num):
 
     return out
 
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def recursive_AABB(\
+        ncells,
+        xvertex0,
+        xvertex1,
+        connectivity,
+        grid_cell):
 
+    assert ncells.shape == (2,)
+    nvrtx0, nvrtx1 = [ncells[0] + 1, ncells[1] + 1]
+    for vrtx in (xvertex0, xvertex1,):
+        assert vrtx.shape == (nvrtx0 , nvrtx1, 3)
+
+    to_check = array([[1]])
+    collision_chunks = np.zeros(to_check.shape, dtype = bool)
+    curr_chunk_cells = grid_cell
+    nchunk = array([1, 1])
+    ct = 0
+
+    while True:
+        for (ii,jj) in np.argwhere(to_check):
+            # get the coordinates of the vertices from the chunk of cells
+            chunk_vrtx_coord_ii = get_vertices_from_chunk_cells(xvertex0, connectivity, curr_chunk_cells)
+            chunk_vrtx_coord_jj = get_vertices_from_chunk_cells(xvertex1, connectivity, curr_chunk_cells)
+            # create AABBs
+            aabb0 = getAABBLim(chunk_vrtx_coord_ii.reshape(-1,3))
+            aabb1 = getAABBLim(chunk_vrtx_coord_jj.reshape(-1,3))
+            collision_chunks[ii,jj] = collision_AABB(aabb0, aabb1)
+
+        if np.where(collision_chunks)[0].shape[0] == 0:
+            # no intersection between aabb has been found. there is not contact possible
+            print('No Collision detected')
+            return 0, None
+        else:
+            # TODO: if there is an entire line of 0 ir an entire row of 0, means the chunk is not
+            # intersecting with anything
+
+            nchunk += 1
+            # generate chunks in xi and theta dir
+            chunk_xi = np.array_split(np.arange(ncells[0]), nchunk[0])
+            chunk_theta = np.array_split(np.arange(ncells[1]), nchunk[1])
+            # el per chunk
+            el_per_chunk_xi = [len(chunk_xii) for chunk_xii in chunk_xi]
+            el_per_chunk_theta = [len(chunk_thetai) for chunk_thetai in chunk_theta]
+            # get rows and colums needed to split the cell table to get chunks
+            limits_chunks_xi = np.hstack((0, np.cumsum(el_per_chunk_xi)))
+            limits_chunks_theta = np.hstack((0, np.cumsum(el_per_chunk_theta)))
+            curr_chunk_cells=zeros((len(el_per_chunk_xi), len(el_per_chunk_theta)), dtype =
+                    np.object)
+            for i in range(len(el_per_chunk_xi)):
+                for j in range(len(el_per_chunk_theta)):
+                    curr_chunk_cells[i,j] = grid_cell[limits_chunks_xi[i]: limits_chunks_xi[i+1], \
+                            limits_chunks_theta[i] : limits_chunks_theta[i+1]]
+            set_trace()
+            # must be changed once we will have remove the unneccessary entries
+            to_check = np.ones(curr_chunk_cells.shape, dtype = bool)
+
+
+
+
+        ct += 1
+        if ct > 100:
+            raise ValueError('max number of truncation attained')
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def get_vertices_from_chunk_cells(grid, Con, cells):
+    Xvert = zeros((cells.shape + (4, 3) ) )
+    for ii in range(cells.shape[0]):
+        for jj in range(cells.shape[1]):
+            Xvert[ii,jj] =  getCellVertices( [ii,jj], grid, Con)
+    return Xvert
+
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def getAABBLim(X):
+    return array([ np.min(X , axis = 0),\
+            np.max(X, axis = 0)] )
+
+
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def collision_AABB(aabb1, aabb2, eps = 0, sanity_check = 1):
+    """
+    Check Collision of 2 Bounding Boxes
+    #  ________
+    # |\       |\
+    # |_\______|_\
+    # \ |      \ |
+    #  \|_______\|
+    #
+    #
+    """
+    if sanity_check:
+        for aabb in [aabb1, aabb2]:
+           assert aabb.shape== (2,3)
+           assert np.all(aabb[0] < aabb[1]), 'first line should be\
+           minimums while second line should correspond to maximums'
+
+    xmin_1, ymin_1, zmin_1, xmax_1, ymax_1, zmax_1 = aabb1.flatten()
+    xmin_2, ymin_2, zmin_2, xmax_2, ymax_2, zmax_2 = aabb2.flatten()
+    # www.miguelcasillas.com/?p=30
+    return (xmax_1 >= xmin_2 - eps) and\
+            (xmin_1 <= xmax_2 + eps) and\
+            (ymax_1 >= ymin_2 -eps) and\
+            (ymin_1 <= ymax_2+eps) and\
+            (zmax_1 >= zmin_2-eps) and\
+            (zmin_1 <= zmax_2+eps)
+
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def plot_AABB(lim, color = (0.,1.,0.) ):
+   assert lim.shape== (2,3)
+
+   Pts = zeros((8,3), dtype = float)
+   xmin, ymin, zmin, xmax, ymax, zmax = lim.flatten()
+   Pts[:4, 2] = zmin
+   Pts[4:, 2] = zmax
+   Pts[0, :2] = [xmax, ymin]
+   Pts[1, :2] = [xmax, ymax]
+   Pts[2, :2] = [xmin, ymax]
+   Pts[3, :2] = [xmin, ymmin]
+   Pts[4, :2] = [xmax, ymin]
+   Pts[5, :2] = [xmax, ymax]
+   Pts[6, :2] = [xmin, ymax]
+   Pts[7, :2] = [xmin, ymmin]
+
+   src = mlab.pipeline.scalar_scatter(Pts[:,0] , Pts[:,1] , Pts[:,2],
+           np.zeros(Pts[:,0].shape))
+   connections = array([
+       [0,1], [1,2], [2,3], [3,0],
+       [4,5], [5,6], [6,7], [7,4],
+       [0,4], [1,5], [2,6], [3,7]
+       ])
+   # Connect them
+   self.src_QP_FG.mlab_source.dataset.lines = connections
+   # The stripper filter cleans up connected lines
+   self.lines = mlab.pipeline.stripper(self.src_QP_FG)
+   mlab.pipeline.surface(lines, colormap='Accent', line_width=1, opacity=.4)
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def is_point_in_AABB(aabb, Pt):
+    xmin, ymin, zmin, xmax, ymax, zmax = aabb.flatten()
+    return (xmin <= Pt[0] <= xmax) and\
+    (ymin <= Pt[1] <= ymax) and\
+    (zmin <= Pt[2] <= zmax)
 
 
 

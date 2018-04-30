@@ -102,6 +102,7 @@ class Solver():
         self.restore_to_prev_converge_if_AS_wrong = False
         self.stp = 0
         self.tn = 0
+        self.record_results = True
 
 
     ################################################################################
@@ -184,8 +185,11 @@ class Solver():
         #------------------------------------------------------------------------------
             # INITIALIZE SOLVER AND CREATE OUTPUT FILE TO STORE SIM. RESULTS
         #------------------------------------------------------------------------------
-        LoadResults, Success, t = self.getOutputFile(\
-            Loading.tfinal, 'NR', FEM.ndofs_el)
+        if self.record_results:
+            LoadResults, Success, t = self.getOutputFile(\
+                Loading.tfinal, 'NR', FEM.ndofs_el)
+        else:
+            LoadResults, Success, t = (0,0,0)
 
         if LoadResults:
             if Success:
@@ -208,10 +212,6 @@ class Solver():
             step_start = 0
         if FEM.HasConstraints:
             Tab = FEM.ContactTable
-            if FEM.enforcement==0:
-                assert FEM.is_set_penalty_options, 'penalty parameters not\
-            initialized'
-
             # CHOOSE INITIAL ACTIVE SET
             # for the other steps, the active set will be taken at the
             # begin of the step as the one from the previoulsy
@@ -233,7 +233,8 @@ class Solver():
                 try:
                     (u, fr) = self.solve_TS_NR(duG, fext, di ,fr)
                     converged = 1
-                    self.CommitTS(t, di, fr, u, fext)
+                    if self.record_results:
+                        self.CommitTS(t, di, fr, u, fext)
                     self.stp += 1
                     self.adaptDELt(1)
                     self.fext = fext
@@ -245,7 +246,12 @@ class Solver():
                         set_trace()
                         raise Failure_Adaptive_TS(t)
                     else:
-                        self.restore_previously_converged()
+
+                        if self.record_results:
+                            self.restore_previously_converged()
+                        else:
+                            raise ValueError('cannot restore because recording results has been\
+                                    turned off')
             self.tn = t
 
 

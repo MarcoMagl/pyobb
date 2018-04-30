@@ -3,6 +3,7 @@ import numpy as np
 from numpy import zeros, ones, ones_like, where, ix_, array
 from pdb import set_trace
 from Common.UserDefErrors import MaximumPenetrationError
+from Common import Utilities
 
 #------------------------------------------------------------------------------
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -104,19 +105,19 @@ class ContactTable():
         np.all(ncells >= 1)
         self.ncells = ncells
 
-        # generate coordinates of the cells vertices (in parent coordinates)
-        xi_lim = np.linspace(0, 1, self.ncells[0] + 1)
-        theta_lim = np.linspace(0, 2 * np.pi, self.ncells[1] + 1)
-        if self.ncells[0] == 1:
-            self.xi_cells = array([xi_lim])
-        else:
-            self.xi_lim =  np.vstack((xi_lim[:-1], xi_lim[1:])).T
+        # generate coordinates of the cells (in parent coordinates)
 
-        if self.ncells[1] == 1:
-            self.theta_lim= array([theta_lim])
-        else:
-            self.theta_lim =  np.vstack((theta_lim[:-1],
-                theta_lim[1:])).T
+        self.grid_cell_vert, self.cell_connectivity,\
+        self.grid_cell =\
+        Utilities.generation_grid_quadri_and_connectivity(
+                [0,1],
+                [0, 2 * np.pi],
+                self.ncells[0],
+                self.ncells[1])
+        self.xi_vert = np.linspace(0,1, self.ncells[0] + 1)
+        self.theta_vert = np.linspace(0, 2 * np.pi, self.ncells[1] + 1)
+
+        self.active_set = []
         self.is_set_parameter_weak_enforcement = True
 
 
@@ -354,7 +355,7 @@ class ContactTable():
         """
         Method = self.method_regularization
         maxPenAllow = self.maxPenAllow
-        mul = self.Multiplier_Pen
+        mul =  self.coeff_mul
         IsCorrectPenStiff = True
         """
         if np.argwhere(self.active_set).shape[0] > 0:
@@ -368,7 +369,8 @@ class ContactTable():
             # if one of the GQP is too much penetrated, we increase
             # the penalty for all the GQP
         """
-        for ii in range( len(self.gN)):
+        for ii in self.active_set:
+            set_trace()
             ToIncr = np.argwhere(self.gN[ii] < maxPenAllow)
             if ToIncr.shape[0] > 0:
                 print('Some increase penalty stiff')
