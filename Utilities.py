@@ -1,6 +1,6 @@
 from __future__ import division
 import numpy as np
-from numpy import array, zeros, eye, dot
+from numpy import array, zeros, ones, eye, dot
 from math import sin, cos
 import math
 from numpy.linalg import norm
@@ -557,21 +557,29 @@ def generation_grid_quadri_and_connectivity(X, Y, Nx, Ny):
     ny = Ny + 1
     x = np.linspace(X[0], X[1], nx)
     y = np.linspace(Y[0], Y[1], ny)
-    grid = np.meshgrid(x,y)
-    nID = np.arange(np.product(grid[0].shape)).reshape(grid[0].shape)
-    grid_cell = np.arange(Nx * Ny).reshape(Nx, Ny)
+    # ATTENTION : the x coordinates are read along columns and the y along axis 0 !
+    coord = zeros((nx , ny, 2), dtype = float)
+    for i in range(coord.shape[0]):
+        for j in range(coord.shape[1]):
+            coord[i,j] = [x[i], y[j]]
 
+    nID = np.arange(nx * ny).reshape((ny,nx))
+    # ATTENTION: check the grid_cell array to understand why Ny and Nx are inverted
+    grid_cell = np.arange(Nx * Ny).reshape(Ny, Nx)
+
+    # connectivity per cell
     Con = zeros((Nx * Ny, 4), dtype = int)
     Con[:,0] = nID[:-1, :-1].ravel()
     Con[:,1] = nID[:-1, 1:].ravel()
     Con[:,2] = nID[1:, 1:].ravel()
     Con[:,3] = nID[1:, :-1].ravel()
-    # unravel the indices to keep the structure
-    ConUnrav = array(np.unravel_index(Con, grid[0].shape ))
-
+    Con = Con.reshape( (Ny, Nx, 4) )
+    # the connectivity is at this point given in terms of nID. We would like to have it directly in
+    # terms of indiced in the grid of nodes
+    #ConUnrav = array(np.unravel_index(Con, grid[0].shape ))
     #plot_cells_regular_grid(grid , ConUnrav, In2D = True)
 
-    return grid, ConUnrav, grid_cell
+    return coord, Con, grid_cell
 
 
 #------------------------------------------------------------------------------
@@ -607,24 +615,11 @@ def plot_cells_regular_grid(grid, Con, In2D = False):
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def getCellVertices(idx_cell, grid, Con):
-    ii = Con[0][idx_cell[0]]
-    jj = Con[1][idx_cell[1]]
-    return grid[ii,jj]
-
-#------------------------------------------------------------------------------
-#
-#-----------------------------------------------------------------------------
-def chunkIt(seq, num):
-    avg = len(seq) / float(num)
-    out = []
-    last = 0.0
-
-    while last < len(seq):
-        out.append(seq[int(last):int(last + avg)])
-        last += avg
-
-    return out
+def getCellVertices(cell, grid, Con):
+    ii, jj = np.unravel_index(cell, Con.shape[:-1])
+    nIDs = Con[ii][jj]
+    nIDs = np.unravel_index(nIDs, grid.shape[:-1])
+    return grid[nIDs ]
 
 #------------------------------------------------------------------------------
 #
@@ -641,23 +636,36 @@ def recursive_AABB(\
     for vrtx in (xvertex0, xvertex1,):
         assert vrtx.shape == (nvrtx0 , nvrtx1, 3)
 
-    to_check = array([[1]])
-    collision_chunks = np.zeros(to_check.shape, dtype = bool)
-    curr_chunk_cells = grid_cell
+    pairs_chunks_to_check = ones((1,1,1,1), dtype = bool)
+    collision_chunks = np.zeros(pairs_chunks_to_check.shape, dtype = bool)
+    curr_chunk_cells = array([[grid_cell]])
     nchunk = array([1, 1])
     ct = 0
 
     while True:
-        for (ii,jj) in np.argwhere(to_check):
+        for (ii,jj,kk,ll) in np.argwhere( pairs_chunks_to_check ):
             # get the coordinates of the vertices from the chunk of cells
-            chunk_vrtx_coord_ii = get_vertices_from_chunk_cells(xvertex0, connectivity, curr_chunk_cells)
-            chunk_vrtx_coord_jj = get_vertices_from_chunk_cells(xvertex1, connectivity, curr_chunk_cells)
-            # create AABBs
-            aabb0 = getAABBLim(chunk_vrtx_coord_ii.reshape(-1,3))
-            aabb1 = getAABBLim(chunk_vrtx_coord_jj.reshape(-1,3))
-            collision_chunks[ii,jj] = collision_AABB(aabb0, aabb1)
+            chunk_vrtx_coord_0 = get_vertices_from_chunk_cells(\
+                    xvertex0, connectivity, curr_chunk_cells[ii,jj])
+            chunk_vrtx_coord_1 = get_vertices_from_chunk_cells(\
+                    xvertex1, connectivity, curr_chunk_cells[kk,ll])
+            if not chunk_vrtx_coord_0.shape[0] == 0 and\
+                    not chunk_vrtx_coord_1.shape[0] == 0:
+                # create AABBs
+                aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
+                aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
+                collision_chunks[ii,jj, kk, ll] = collision_AABB(aabb0, aabb1)
+                """
+                if ct > 0:
+                    aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
+                    aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
+                    plot_AABB(aabb0 , s_in = 1/(ct + 1) )
+                    plot_AABB(aabb1 , s_in=  1/(ct + 1) )
+                    set_trace()
+                """
 
-        if np.where(collision_chunks)[0].shape[0] == 0:
+
+        if np.argwhere(collision_chunks).shape[0] == 0:
             # no intersection between aabb has been found. there is not contact possible
             print('No Collision detected')
             return 0, None
@@ -665,13 +673,37 @@ def recursive_AABB(\
             # TODO: if there is an entire line of 0 ir an entire row of 0, means the chunk is not
             # intersecting with anything
 
+            if ct > 0 and np.all(el_per_chunk_xi<=1) and np.all(el_per_chunk_theta<=1):
+                # graphical checking
+                """
+                for (ii,jj,kk,ll) in np.argwhere(collision_chunks):
+                    chunk_vrtx_coord_0 = get_vertices_from_chunk_cells(\
+                            xvertex0, connectivity, curr_chunk_cells[ii,jj])
+                    chunk_vrtx_coord_1 = get_vertices_from_chunk_cells(\
+                            xvertex1, connectivity, curr_chunk_cells[kk,ll])
+                    assert chunk_vrtx_coord_0.shape == (4,3)
+                    assert chunk_vrtx_coord_1.shape == (4,3)
+                    # create AABBs
+                    aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
+                    aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
+                    plot_AABB(aabb0 , s_in = 0. )
+                    plot_AABB(aabb1 , s_in=  1. )
+                """
+
+                return 1, np.argwhere(collision_chunks)
+
             nchunk += 1
             # generate chunks in xi and theta dir
             chunk_xi = np.array_split(np.arange(ncells[0]), nchunk[0])
             chunk_theta = np.array_split(np.arange(ncells[1]), nchunk[1])
             # el per chunk
-            el_per_chunk_xi = [len(chunk_xii) for chunk_xii in chunk_xi]
-            el_per_chunk_theta = [len(chunk_thetai) for chunk_thetai in chunk_theta]
+            el_per_chunk_xi = array([len(chunk_xii) for chunk_xii in chunk_xi])
+            el_per_chunk_theta = array( [len(chunk_thetai) for chunk_thetai in chunk_theta])
+            if np.any(el_per_chunk_xi ==0):
+                el_per_chunk_xi = np.delete(el_per_chunk_xi, np.argwhere(el_per_chunk_xi == 0))
+            if np.any(el_per_chunk_theta ==0):
+                el_per_chunk_theta = np.delete(el_per_chunk_theta, np.argwhere(el_per_chunk_theta == 0))
+
             # get rows and colums needed to split the cell table to get chunks
             limits_chunks_xi = np.hstack((0, np.cumsum(el_per_chunk_xi)))
             limits_chunks_theta = np.hstack((0, np.cumsum(el_per_chunk_theta)))
@@ -680,13 +712,10 @@ def recursive_AABB(\
             for i in range(len(el_per_chunk_xi)):
                 for j in range(len(el_per_chunk_theta)):
                     curr_chunk_cells[i,j] = grid_cell[limits_chunks_xi[i]: limits_chunks_xi[i+1], \
-                            limits_chunks_theta[i] : limits_chunks_theta[i+1]]
-            set_trace()
-            # must be changed once we will have remove the unneccessary entries
-            to_check = np.ones(curr_chunk_cells.shape, dtype = bool)
-
-
-
+                            limits_chunks_theta[j] : limits_chunks_theta[j+1]]
+            # pairs of chunk cells to check
+            pairs_chunks_to_check = np.ones(curr_chunk_cells.shape + curr_chunk_cells.shape, dtype = bool)
+            collision_chunks = np.zeros(pairs_chunks_to_check.shape, dtype = bool)
 
         ct += 1
         if ct > 100:
@@ -696,10 +725,9 @@ def recursive_AABB(\
 #
 #-----------------------------------------------------------------------------
 def get_vertices_from_chunk_cells(grid, Con, cells):
-    Xvert = zeros((cells.shape + (4, 3) ) )
-    for ii in range(cells.shape[0]):
-        for jj in range(cells.shape[1]):
-            Xvert[ii,jj] =  getCellVertices( [ii,jj], grid, Con)
+    Xvert = zeros((cells.flatten().shape + (4, 3) ) )
+    for ii, cell in enumerate(cells.flatten()):
+        Xvert[ii] =  getCellVertices( cell, grid, Con)
     return Xvert
 
 
@@ -707,6 +735,8 @@ def get_vertices_from_chunk_cells(grid, Con, cells):
 #
 #-----------------------------------------------------------------------------
 def getAABBLim(X):
+    assert X.shape[0] >0 and X.shape[1] == 3
+
     return array([ np.min(X , axis = 0),\
             np.max(X, axis = 0)] )
 
@@ -746,7 +776,7 @@ def collision_AABB(aabb1, aabb2, eps = 0, sanity_check = 1):
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def plot_AABB(lim, color = (0.,1.,0.) ):
+def plot_AABB(lim, s_in = 0. ):
    assert lim.shape== (2,3)
 
    Pts = zeros((8,3), dtype = float)
@@ -756,24 +786,27 @@ def plot_AABB(lim, color = (0.,1.,0.) ):
    Pts[0, :2] = [xmax, ymin]
    Pts[1, :2] = [xmax, ymax]
    Pts[2, :2] = [xmin, ymax]
-   Pts[3, :2] = [xmin, ymmin]
+   Pts[3, :2] = [xmin, ymin]
    Pts[4, :2] = [xmax, ymin]
    Pts[5, :2] = [xmax, ymax]
    Pts[6, :2] = [xmin, ymax]
-   Pts[7, :2] = [xmin, ymmin]
+   Pts[7, :2] = [xmin, ymin]
 
-   src = mlab.pipeline.scalar_scatter(Pts[:,0] , Pts[:,1] , Pts[:,2],
-           np.zeros(Pts[:,0].shape))
+
+   #s = np.vstack( (np.zeros(Pts[:,0].shape), np.zeros(Pts[:,0].shape))).T.flatten()
+   s = s_in * np.ones(Pts[:,0].shape, dtype=float)
+   src = mlab.pipeline.scalar_scatter(Pts[:,0] , Pts[:,1] , Pts[:,2])
    connections = array([
        [0,1], [1,2], [2,3], [3,0],
        [4,5], [5,6], [6,7], [7,4],
        [0,4], [1,5], [2,6], [3,7]
        ])
+
    # Connect them
-   self.src_QP_FG.mlab_source.dataset.lines = connections
+   src.mlab_source.dataset.lines = connections
    # The stripper filter cleans up connected lines
-   self.lines = mlab.pipeline.stripper(self.src_QP_FG)
-   mlab.pipeline.surface(lines, colormap='Accent', line_width=1, opacity=.4)
+   lines = mlab.pipeline.stripper(src)
+   mlab.pipeline.surface(lines, line_width=1, opacity=.4)
 
 #------------------------------------------------------------------------------
 #

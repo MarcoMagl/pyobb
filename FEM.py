@@ -433,8 +433,6 @@ class Model():
     #
     #------------------------------------------------------------------------------
     def broad_phase(self,):
-
-
         Tab= self.ContactTable
         self.generate_surface_grid_all_curves()
         AS_CORRECT = True
@@ -455,37 +453,27 @@ class Model():
                 if cells_collide:
                     cells_intersec['id_s'].append(ii)
                     cells_intersec['id_m'].append(jj)
-                    assert id_cells.ndim == 2 and id_cells.shape[1] == 2
+                    assert id_cells.ndim == 2 and id_cells.shape[1] == 4
                     cells_intersec['id_cells'].append(id_cells)
+
+                    for (ii,jj,kk,ll) in id_cells:
+                        # TODO : unnecessary operation because the table of connectivity uses
+                        # unravelled indices
+                        cell_i = np.ravel_multi_index((ii,jj ), Tab.grid_cell.shape )
+                        cell_j = np.ravel_multi_index((kk,ll ), Tab.grid_cell.shape )
+                        set_trace()
+                        chunk_vrtx_coord_0 = get_vertices_from_chunk_cells(\
+                                self.grid_surf_points[ii],Tab.cell_connectivity,
+                                cell_i)
+                        chunk_vrtx_coord_1 = get_vertices_from_chunk_cells(\
+                                self.grid_surf_points[jj],Tab.cell_connectivity,
+                                cell_j)
+                        # create AABBs
+                        aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
+                        aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
+                        plot_AABB(aabb0 , s_in = 0. )
+                        plot_AABB(aabb1 , s_in=  1. )
         return cells_intersec
-
-
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def recursive_AABB(self, ii, jj, AS_Correct):
-        Tab = self.ContactTable
-        m, n = Tab.ncells # n of cells in xi and theta dir.
-        div_xi, div_theta = (1, 1)
-        chunks_ii
-        END = False
-        ct = 0
-        while not END :
-            AABBs_ii  = self.chunk_cells_and_get_AABBs(ii, div_xi, div_theta)
-            AABBs_jj = self.chunk_cells_and_get_AABBs(jj, div_xi, div_theta)
-            if not collision_AABB(aabb1, aabb2, eps = 1e-6):
-                END = True
-            else:
-                if div_xi < m : div_xi += 1
-                if div_theta < m : div_theta += 1
-                if (div_xi == m) and (div_theta == n) :
-                    self.narrow_phase_cells(ii, jj , check_if_contact_missed = AS_Correct )
-                    # expl : if we already know that the contact set is wrong, useless to
-                    # compare list of active cells (current and stored)
-                    END = True
-
-
 
     #------------------------------------------------------------------------------
     #
@@ -508,8 +496,9 @@ class Model():
             raise ValueError('The contact table must be set! Use set_Contact_Table method ')
         # ABB intersection
         cells_intersect = self.broad_phase()
-        # return bool: true if AS was correct
-        return self.narrow_phase(cells_intersect)
+        AS_correct = self.narrow_phase(cells_intersect)
+        assert isinstance(AS_correct, bool)
+        return AS_correct
 
     #------------------------------------------------------------------------------
     #
@@ -517,8 +506,8 @@ class Model():
     def check_current_active_set(self, stp = 0):
         Tab = self.ContactTable
         # restore attribute
-        self.current_active_set_correct= self.choose_active_set(stp)
-        AS_correct = self.current_active_set_correct
+        AS_correct = self.choose_active_set(stp)
+        assert isinstance(AS_correct, bool)
 
         if self.enforcement == 0:
             # regularizes the penalty stiffnesses if necessary
@@ -561,14 +550,18 @@ class Model():
     def narrow_phase(self, cells_intersect ):
         Tab = self.ContactTable
         current_active_slave = array(Tab.active_set)
-        # for the time being all the cells have the smae number of integration point
         nxiGQP, nthetaGQP = Tab.nxiGQP, Tab.nthetaGQP
         nuxiGQP, WnuxiGQP =  np.polynomial.legendre.leggauss(nxiGQP)
         nuthetaGQP, WnuthetaGQP = np.polynomial.legendre.leggauss(nthetaGQP)
 
         AS_correct = True
 
-        for ii, slave in enumerate(cells_intersect['id_s']):
+        for slave in self.slave_curves_ids:
+            if slave in cells_intersect['id_s']:
+                set_trace()
+        return AS_correct
+        """
+
             master_close = cells_intersect['id_m'][ii]
             is_active_slave, idx_in_AS = Tab.query_is_active_slave(slave)
             nmclose = len(master_close[0])
@@ -630,18 +623,6 @@ class Model():
                     if collision_btw_obb(obb_m, obb_slave, eps = 1e-10):
                         collision_obb = True
 
-                        """
-                        self.plot_integration_interval(
-                            self.el_per_curves[slave],
-                            array([0, 1.]),
-                            array([0, 2 * np.pi]),
-                            opacity = 1., color = (0.,0.,0.) )
-                        scatter_3d( samp_on_master_candi[uu].reshape(-1,3), color = (1.,1.,1.))
-                        scatter_3d( samp_on_master_candi[uu].reshape(-1,3), color = (1.,1.,1.))
-                        plot_obb_vertices(obb_m, (1.,0.,0.))
-                        plot_obb_vertices(obb_slave, (0.,1.,0.))
-                        set_trace()
-                        """
 
                 if collision_obb:
                     # a closer look at the penetration is needed
@@ -669,7 +650,6 @@ class Model():
                                 has_int_theta_lim.append(Tab.theta_lim[jj])
 
                                 # DO NOT DELETE THESE LINES
-                                """
                                 self.plot_integration_interval(
                                     self.el_per_curves[slave],
                                     Tab.xi_lim[ii],
@@ -683,7 +663,6 @@ class Model():
                                 scatter_3d( samp_on_master_candi[uu].reshape(-1,3), color = (1.,1.,1.))
                                 plot_obb_vertices(obb_m, (1.,1.,1.))
                                 set_trace()
-                                """
 
 
                     if len(has_int_xi_lim) == 0 or len(has_int_theta_lim) == 0 :
@@ -869,6 +848,7 @@ class Model():
                 if is_active_slave:
                     raise ValueError('the element was active but all of its cells for deactivated at once. Dangerous')
         return AS_correct
+        """
 
 
     #------------------------------------------------------------------------------
