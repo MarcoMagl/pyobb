@@ -111,15 +111,17 @@ class ContactTable():
         # we remove the last point because theta = 0 and theta = 2 pi gives the same point in space
         self.theta_vert = np.linspace(0, 2 * np.pi, self.ncells_theta + 1, endpoint = False)
 
-        self.grid_cell_vert, self.cell_connectivity, self.grid_cell =\
+        self.conv_coord_grid , self.cell_connectivity, self.grid_cell =\
             Utilities.generation_grid_quadri_and_connectivity(
                 self.xi_vert,
                 self.theta_vert)
+
 
         # check consistency grid cells
         # TRAP: to go to the next cell in the xi direction, we change column
         # to go to the next cell in the theta direction, we change row
         assert self.grid_cell.shape == (self.ncells_theta, self.ncells_xi)
+        assert np.array_equal(array(Tab.grid_cell_vert.shape[:-1]) - 1, array(self.grid_cell.shape))
 
         self.active_set = []
         self.is_set_parameter_weak_enforcement = True

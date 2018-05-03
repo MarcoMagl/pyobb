@@ -580,8 +580,45 @@ class Model():
 
         AS_correct = True
 
-        for slave in cells_intersect['id_s']:
-            set_trace()
+        slave_candi = np.unique(cells_intersect['id_s'])
+        for slave in slave_candi:
+            ind = np.where(cells_intersect['id_s'] == slave)
+            # only for the time being
+            assert ind[0].shape[0] <= 1
+            master = array(cells_intersect['id_m'])[ind]
+            # generate the intervals of cells on master and slave surface
+            id_cells = cells_intersect['id_cells'][int(ind[0])]
+            row_min_sl = np.min(id_cells[:,0])
+            row_max_sl = np.max(id_cells[:,0])
+            col_min_sl = np.min(id_cells[:,1])
+            col_max_sl = np.max(id_cells[:,1])
+            row_min_mstr = np.min(id_cells[:,2])
+            row_max_mstr = np.max(id_cells[:,2])
+            col_min_mstr = np.min(id_cells[:,3])
+            col_max_mstr = np.max(id_cells[:,3])
+
+            sl_dom = Tab.grid_cell[row_min_sl:row_max_sl + 1, col_min_sl:col_max_sl+1].ravel()
+            mstr_dom = Tab.grid_cell[row_min_mstr:row_max_mstr + 1,
+                    col_min_mstr:col_max_mstr+1].ravel()
+            samp_pts_mstr = []
+            for cell in mstr_dom.ravel():
+                samp_pts_mstr.append( sample_points_on_cell(master, cell, nxi_s = 10, ntheta_s = 10))
+
+
+            for cell in sl_dom.ravel():
+                for i in range(Tab.nxiGQP):
+                    for j in range(Tab.ntheta_sampled):
+                        nuxi = nuxiGQP[i]
+                        Wxi  = WnuxiGQP[i]
+                        nutheta = nuthetaGQP[j]
+                        Wtheta  = WnuthetaGQP[j]
+                        # get FG
+                        # TODO : enhance and look for solution already computed
+
+
+
+
+
         return AS_correct
         """
 
@@ -2031,6 +2068,47 @@ class Model():
         return pos
 
 
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def sample_points_on_cell(self, id_c, cell_id, nxi_s = 10, ntheta_s = 10):
+        Tab = self.ContactTable
+
+        # cell info
+        if isinstance(cell_id, int):
+            cell_id = np.unravel_index(cell_id, Tab.
+        assert cell_id.shape == (1,1)
+        vID_CELL = np.unravel_index(vID_CELL)
+        vID_CELL = Tab.cell_connectivity[cell_id]
+        assert vID_CELL.shape == (4,)
+        XI_CELL = Tab.conv_coord_grid[vID_CELL]
+        XI_CELL = XI_CELL.reshape(-1,4)
+        ximin = np.min(XI_CELL[:,0])
+        ximax = np.max(XI_CELL[:,0])
+        assert np.all(XI_CELL[:,0] <= 1)
+        xi = np.linspace(ximin, xmax, nxi_s)
+        theta = np.linspace(thetamin, xmax, ntheta_s)
+
+        # curve info
+        id_els = self.el_per_curves[id_c]
+        nd_C =  self.nPerEl[id_els,].flatten()[(0,1,3),]
+
+        pos = zeros(( nxi_s, ntheta_s , 3), dtype = np.double)
+
+        GeoSmooth.samplePointsOnSurface(\
+            self.X[nd_C,].ravel(),\
+            self.u[nd_C,].ravel(),\
+            self.v[nd_C,].ravel(),\
+            self.t1[id_els,],\
+            self.t2[id_els,],\
+            self.a_crossSec[id_els][0],\
+            self.b_crossSec[id_els][0],\
+            self.ContactTable.alpha,\
+            xis,
+            thetas,
+            pos)
+
+        return pos
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
