@@ -106,8 +106,7 @@ class ContactTable():
         self.ncells_xi = ncells[0]
         self.ncells_theta = ncells[1]
 
-        # generate coordinates of the cells (in parent coordinates)
-
+        # generate coordinates of the cells vertices (in parent coordinates)
         self.xi_vert = np.linspace(0,1, self.ncells_xi + 1)
         # we remove the last point because theta = 0 and theta = 2 pi gives the same point in space
         self.theta_vert = np.linspace(0, 2 * np.pi, self.ncells_theta + 1, endpoint = False)

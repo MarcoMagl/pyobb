@@ -624,6 +624,7 @@ def getCellVertices(cell, grid, con):
 def plot_cell(grid, cell, con, color = (1.,0.,0.)):
     X =  getCellVertices(cell, grid, con)
     assert X.shape == (4,3)
+    # close the polygon
     X = np.vstack((X, X[0]))
     return mlab.plot3d(X[:,0], X[:,1], X[:,2], color = color, tube_radius = None)
 
@@ -671,14 +672,12 @@ def recursive_AABB(\
 
         if np.argwhere(collision_chunks).shape[0] == 0:
             # no intersection between aabb has been found. there is not contact possible
-            print('No Collision detected')
             return 0, None
         else:
             # TODO: if there is an entire line of 0 ir an entire row of 0, means the chunk is not
             # intersecting with anything
 
-            if ct > 0 and np.all(el_per_chunk_xi<=1) and np.all(el_per_chunk_theta<=1):
-                set_trace()
+            if ct > 0 and np.all(cell_per_chunk_xi<=1) and np.all(cell_per_chunk_theta<=1):
                 scatter3d(xvertex0.reshape(-1,3), mode = 'point', color = (1.,1.,1.))
                 scatter3d(xvertex1.reshape(-1,3), mode = 'point', color = (1.,1.,1.))
                 for (kk,ll,mm,nn) in np.argwhere(collision_chunks):
@@ -687,38 +686,52 @@ def recursive_AABB(\
                     color = tuple(np.random.rand(3))
                     plot_cell(xvertex0, cell0  , connectivity, color = color)
                     plot_cell(xvertex1, cell1  , connectivity, color = color)
-
+                    X0 =  getCellVertices(cell0, xvertex0, connectivity)
+                    X1 =  getCellVertices(cell1, xvertex1, connectivity)
+                    scatter3d(X0, mode = 'sphere')
+                    scatter3d(X1, mode = 'sphere')
                     #plot_cells_regular_grid(xvertex0,connectivity)
-                    aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
-                    aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
+                    aabb0 = getAABBLim(X0.reshape(-1,3))
+                    aabb1 = getAABBLim(X1.reshape(-1,3))
                     plot_AABB(aabb0 , s_in = 1/(ct + 1) )
                     plot_AABB(aabb1 , s_in=  1/(ct + 1) )
-                    scatter3d(chunk_vrtx_coord_0.reshape(-1,3), mode = 'sphere', color = (1.,0.,0.))
-                    scatter3d(chunk_vrtx_coord_1.reshape(-1,3), mode = 'sphere', color = (1.,1.,0.))
+                    set_trace()
                 return 1, np.argwhere(collision_chunks)
 
             nchunk += 1
             # generate chunks in xi and theta dir
-            chunk_xi = np.array_split(np.arange(ncells[0]), nchunk[0])
-            chunk_theta = np.array_split(np.arange(ncells[1]), nchunk[1])
+            chunk_theta = np.array_split(np.arange(ncells[0]), nchunk[0])
+            chunk_xi = np.array_split(np.arange(ncells[1]), nchunk[1])
             # el per chunk
-            el_per_chunk_xi = array([len(chunk_xii) for chunk_xii in chunk_xi])
-            el_per_chunk_theta = array( [len(chunk_thetai) for chunk_thetai in chunk_theta])
+            cell_per_chunk_theta = array( [len(chunk_thetai) for chunk_thetai in chunk_theta])
+            cell_per_chunk_xi = array([len(chunk_xii) for chunk_xii in chunk_xi])
 
-            if np.any(el_per_chunk_xi ==0):
-                el_per_chunk_xi = np.delete(el_per_chunk_xi, np.argwhere(el_per_chunk_xi == 0))
-            if np.any(el_per_chunk_theta ==0):
-                el_per_chunk_theta = np.delete(el_per_chunk_theta, np.argwhere(el_per_chunk_theta == 0))
+            if np.any(cell_per_chunk_theta ==0):
+                index = np.argwhere(cell_per_chunk_theta == 0)
+                cell_per_chunk_theta = np.delete(cell_per_chunk_theta, index)
+                chunk_theta = np.delete(chunk_theta, index)
+
+            if np.any(cell_per_chunk_xi ==0):
+                index = np.argwhere(cell_per_chunk_xi == 0)
+                cell_per_chunk_xi = np.delete(cell_per_chunk_xi, np.argwhere(cell_per_chunk_xi == 0))
+                chunk_xi= np.delete(chunk_xi , index)
 
             # get rows and colums needed to split the cell table to get chunks
-            limits_chunks_xi = np.hstack((0, np.cumsum(el_per_chunk_xi)))
-            limits_chunks_theta = np.hstack((0, np.cumsum(el_per_chunk_theta)))
-            curr_chunk_cells=zeros((len(el_per_chunk_xi), len(el_per_chunk_theta)), dtype =
+            limits_chunks_xi = np.hstack((0, np.cumsum(cell_per_chunk_xi)))
+            limits_chunks_theta = np.hstack((0, np.cumsum(cell_per_chunk_theta)))
+
+            curr_chunk_cells=zeros((len(cell_per_chunk_xi), len(cell_per_chunk_theta)), dtype =
                     np.object)
-            for i in range(len(el_per_chunk_xi)):
-                for j in range(len(el_per_chunk_theta)):
-                    curr_chunk_cells[i,j] = grid_cell[limits_chunks_xi[i]: limits_chunks_xi[i+1], \
-                            limits_chunks_theta[j] : limits_chunks_theta[j+1]]
+
+            nchunk_theta = len(cell_per_chunk_theta)
+            nchunk_xi = len(cell_per_chunk_xi)
+            for i in range(nchunk_theta):
+                for j in range(nchunk_xi):
+                    curr_chunk_cells[i,j] =\
+                    grid_cell[limits_chunks_theta[i]: limits_chunks_theta[i+1]][\
+                            limits_chunks_xi[j]: limits_chunks_xi[j+1]]
+                    assert curr_chunk_cells[i,j].shape == (cell_per_chunk_xi[j], cell_per_chunk_theta[i])
+
             # pairs of chunk cells to check
             pairs_chunks_to_check = np.ones(curr_chunk_cells.shape + curr_chunk_cells.shape, dtype = bool)
             collision_chunks = np.zeros(pairs_chunks_to_check.shape, dtype = bool)
