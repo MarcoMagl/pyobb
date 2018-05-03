@@ -677,6 +677,8 @@ def recursive_AABB(\
             # intersecting with anything
 
             if ct > 0 and np.all(cell_per_chunk_xi<=1) and np.all(cell_per_chunk_theta<=1):
+                # graphical check
+                """
                 scatter3d(xvertex0.reshape(-1,3), mode = 'point', color = (1.,1.,1.))
                 scatter3d(xvertex1.reshape(-1,3), mode = 'point', color = (1.,1.,1.))
                 for (kk,ll,mm,nn) in np.argwhere(collision_chunks):
@@ -696,6 +698,17 @@ def recursive_AABB(\
                     plot_AABB(aabb0 , s_in = 1/(ct + 1) )
                     plot_AABB(aabb1 , s_in=  1/(ct + 1) )
                     set_trace()
+                """
+                for (kk,ll,mm,nn) in np.argwhere(collision_chunks):
+                    cell0 = np.ravel_multi_index((kk,ll), ncells)
+                    cell1 = np.ravel_multi_index((mm,nn), ncells)
+                    X0 =  getCellVertices(cell0, xvertex0, connectivity)
+                    X1 =  getCellVertices(cell1, xvertex1, connectivity)
+                    #plot_cells_regular_grid(xvertex0,connectivity)
+                    aabb0 = getAABBLim(X0.reshape(-1,3))
+                    aabb1 = getAABBLim(X1.reshape(-1,3))
+                    assert collision_AABB(aabb0, aabb1), 'the intersection array is wrong'
+                # sanity check
                 return 1, np.argwhere(collision_chunks)
 
             # GENERATION NEW CHUNK OF CELLS

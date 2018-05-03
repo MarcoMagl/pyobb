@@ -436,11 +436,11 @@ class Model():
         Tab= self.ContactTable
         self.generate_surface_grid_all_curves()
         AS_CORRECT = True
-        cells_intersec = dict(id_s = [],
+        cells_intersect = dict(id_s = [],
                 id_m = [],
                 id_cells = [])
 
-        # construct recursive AABB intersection
+        # construct recursive AABB intersecttion
         for ii in self.slave_curves_ids:
             for jj in self.master_curves_ids:
                 cells_collide, id_cells =\
@@ -451,10 +451,10 @@ class Model():
                                 Tab.grid_cell)
 
                 if cells_collide:
-                    cells_intersec['id_s'].append(ii)
-                    cells_intersec['id_m'].append(jj)
+                    cells_intersect['id_s'].append(ii)
+                    cells_intersect['id_m'].append(jj)
                     assert id_cells.ndim == 2 and id_cells.shape[1] == 4
-                    cells_intersec['id_cells'].append(id_cells)
+                    cells_intersect['id_cells'].append(id_cells)
 
                     """
                     glyph0 = Utilities.scatter3d(
@@ -468,15 +468,15 @@ class Model():
                     """
 
                     for (kk,ll,mm,nn) in id_cells:
-
-                        # TODO : unnecessary operation because the table of connectivity uses
-                        # unravelled indices
                         cell_0 = np.ravel_multi_index((kk,ll ), Tab.grid_cell.shape )
                         cell_1 = np.ravel_multi_index((mm,nn ), Tab.grid_cell.shape )
+                        """
                         # draw the cells
                         plot_cell(self.grid_surf_points[ii] , cell_0, Tab.cell_connectivity, color = (1.,0.,0.))
 
                         plot_cell(self.grid_surf_points[jj] , cell_1, Tab.cell_connectivity, color = (1.,1.,0.))
+                        """
+                        # sanity check
                         chunk_vrtx_coord_0 = get_vertices_from_chunk_cells(\
                                 self.grid_surf_points[ii],Tab.cell_connectivity,
                                 array([cell_0]))
@@ -489,10 +489,15 @@ class Model():
                         # DO NOT REMOVE THIS CHECK
                         assert Utilities.collision_AABB(aabb0, aabb1)
 
+                        """
                         plot_AABB(aabb0 , s_in = 0. )
                         plot_AABB(aabb1 , s_in=  1. )
                         set_trace()
-        return cells_intersec
+                        """
+
+        assert len(cells_intersect['id_s']) == len(cells_intersect['id_m'])
+        assert len(cells_intersect['id_s']) == len(cells_intersect['id_cells'])
+        return cells_intersect
 
     #------------------------------------------------------------------------------
     #
@@ -575,9 +580,8 @@ class Model():
 
         AS_correct = True
 
-        for slave in self.slave_curves_ids:
-            if slave in cells_intersect['id_s']:
-                set_trace()
+        for slave in cells_intersect['id_s']:
+            set_trace()
         return AS_correct
         """
 
