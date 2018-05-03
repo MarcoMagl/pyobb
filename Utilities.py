@@ -565,14 +565,13 @@ def generation_grid_quadri_and_connectivity(x, y):
     nID = np.arange(nx * ny).reshape((ny,nx))
     assert nID.shape == C.shape[:-1]
     grid_cell = np.arange(Nx * Ny).reshape(Ny, Nx)
-    grid_cell = grid_cell[::-1]
 
     # connectivity per cell
-    Con = zeros((Nx * Ny, 4), dtype = int)
-    Con[:,0] = nID[:-1, :-1].ravel()
-    Con[:,1] = nID[:-1, 1:].ravel()
-    Con[:,2] = nID[1:, 1:].ravel()
-    Con[:,3] = nID[1:, :-1].ravel()
+    Con = zeros((Ny, Nx, 4), dtype = int)
+    Con[:,:,0] = nID[:-1, :-1]
+    Con[:,:,1] = nID[:-1, 1:]
+    Con[:,:,2] = nID[1:, 1:]
+    Con[:,:,3] = nID[1:, :-1]
 
     return C , Con, grid_cell
 
@@ -613,6 +612,7 @@ def plot_cells_regular_grid(grid, Con, In2D = False):
 #-----------------------------------------------------------------------------
 def getCellVertices(cell, grid, con):
     assert grid.shape[-1] == 3
+    cell=np.unravel_index(cell, con.shape[:-1])
     nIDs = con[cell]
     assert len(nIDs) == 4
     nIDs = np.unravel_index(nIDs, grid.shape[:-1])
@@ -643,6 +643,7 @@ def recursive_AABB(\
     for vrtx in (xvertex0, xvertex1,):
         assert vrtx.shape == (nvrtx0 , nvrtx1, 3)
 
+    assert connectivity.shape[:-1]== grid_cell.shape
     con_init_shape = connectivity.shape
 
     pairs_chunks_to_check = ones((1,1,1,1), dtype = bool)
@@ -654,20 +655,18 @@ def recursive_AABB(\
     while True:
         for (ii,jj,kk,ll) in np.argwhere( pairs_chunks_to_check ):
             assert connectivity.shape == con_init_shape
-
             # get the coordinates of the vertices from the chunk of cells
             chunk_vrtx_coord_0 = get_vertices_from_chunk_cells(\
                     xvertex0, connectivity, curr_chunk_cells[ii,jj].flatten())
             chunk_vrtx_coord_1 = get_vertices_from_chunk_cells(\
                     xvertex1, connectivity, curr_chunk_cells[kk,ll].flatten())
-            if not chunk_vrtx_coord_0.shape[0] == 0 and\
-                    not chunk_vrtx_coord_1.shape[0] == 0:
-                # create AABBs
-                aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
-                aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
-                if collision_chunks[ii,jj, kk, ll]:
-                    raise ValueError('pair chunks already checked')
-                collision_chunks[ii,jj, kk, ll] = collision_AABB(aabb0, aabb1)
+            assert np.all(array(chunk_vrtx_coord_0.shape) > 0)
+            assert np.all(array(chunk_vrtx_coord_1.shape) > 0)
+            # create AABBs
+            aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
+            aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
+            assert not collision_chunks[ii,jj, kk, ll], 'pair chunks already checked'
+            collision_chunks[ii,jj, kk, ll] = collision_AABB(aabb0, aabb1)
 
 
         if np.argwhere(collision_chunks).shape[0] == 0:
@@ -693,11 +692,13 @@ def recursive_AABB(\
                     #plot_cells_regular_grid(xvertex0,connectivity)
                     aabb0 = getAABBLim(X0.reshape(-1,3))
                     aabb1 = getAABBLim(X1.reshape(-1,3))
+                    assert collision_AABB(aabb0, aabb1), 'the intersection array is wrong'
                     plot_AABB(aabb0 , s_in = 1/(ct + 1) )
                     plot_AABB(aabb1 , s_in=  1/(ct + 1) )
                     set_trace()
                 return 1, np.argwhere(collision_chunks)
 
+            # GENERATION NEW CHUNK OF CELLS
             nchunk += 1
             # generate chunks in xi and theta dir
             chunk_theta = np.array_split(np.arange(ncells[0]), nchunk[0])
@@ -717,20 +718,20 @@ def recursive_AABB(\
                 chunk_xi= np.delete(chunk_xi , index)
 
             # get rows and colums needed to split the cell table to get chunks
-            limits_chunks_xi = np.hstack((0, np.cumsum(cell_per_chunk_xi)))
             limits_chunks_theta = np.hstack((0, np.cumsum(cell_per_chunk_theta)))
-
-            curr_chunk_cells=zeros((len(cell_per_chunk_xi), len(cell_per_chunk_theta)), dtype =
-                    np.object)
+            limits_chunks_xi = np.hstack((0, np.cumsum(cell_per_chunk_xi)))
 
             nchunk_theta = len(cell_per_chunk_theta)
             nchunk_xi = len(cell_per_chunk_xi)
+            curr_chunk_cells=zeros((nchunk_theta, nchunk_xi), dtype = np.object)
+
             for i in range(nchunk_theta):
                 for j in range(nchunk_xi):
                     curr_chunk_cells[i,j] =\
-                    grid_cell[limits_chunks_theta[i]: limits_chunks_theta[i+1]][\
+                    grid_cell[limits_chunks_theta[i]: limits_chunks_theta[i+1], \
                             limits_chunks_xi[j]: limits_chunks_xi[j+1]]
-                    assert curr_chunk_cells[i,j].shape == (cell_per_chunk_xi[j], cell_per_chunk_theta[i])
+                    assert curr_chunk_cells[i,j].shape == (cell_per_chunk_theta[i],
+                            cell_per_chunk_xi[j])
 
             # pairs of chunk cells to check
             pairs_chunks_to_check = np.ones(curr_chunk_cells.shape + curr_chunk_cells.shape, dtype = bool)
