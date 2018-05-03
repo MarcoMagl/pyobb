@@ -238,10 +238,11 @@ def RodriguesFormula(r):
         Sn = skew(n)
         # in perfect agreement with http://mathworld.wolfram.com/RodriguesRotationFormula.html
         R = eye(3) + sin(nrmr)*Sn + (1-cos(nrmr))*np.dot(Sn,Sn)
+        """
         # ATTENTION, Sn is hiding n that divide by the norm of r
         RSimo = eye(3) + (sin(nrmr)/nrmr)*skew(r) + 0.5 *  (sin(0.5 * nrmr) / (0.5 * nrmr))**2 * skew(r).dot(skew(r))
-
         assert np.allclose(R, RSimo)
+        """
     else:
         Sr = skew(r)
         nrmr2 = nrmr**2
@@ -291,7 +292,6 @@ def get_linear_transfo_between_tgt_spaces_of_SO3(Psi) :
                 0.5 * (sin(0.5 * normP) / (0.5 * normP))**2 * skew(Psi)
         assert not np.any(np.isnan(T))
         return T
-
 
 
 
@@ -359,17 +359,18 @@ def TransformationQuadraturePointsAndWeigths1D(\
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def scatter_3d(coords, color = (1.,0.,0.),\
-        scale_factor = 0.1):
+def scatter3d(coords,
+        color = (1.,0.,0.),\
+        scale_factor = 0.1,
+        mode = 'point'):
     assert (coords.ndim == 2 ) and (coords.shape[1] == 3)
     return mlab.points3d(
             coords[:,0],\
             coords[:,1],\
             coords[:,2],\
             color = color,\
-            mode = 'point')
-
-
+            mode = mode,
+            scale_factor = scale_factor)
 
 
 #------------------------------------------------------------------------------
@@ -400,6 +401,7 @@ def do_cprofile(func):
 #
 #-----------------------------------------------------------------------------
 def overlaps(int1, int2):
+    # return true if two intervals in the real space overlaps each others
     assert len(int1) == 2 and len(int2) == 2
     int1 = Interval(int1[0], int1[1])
     int2 = Interval(int2[0], int2[1])
@@ -544,28 +546,26 @@ def plot_obb_vertices(obb, color =  (1.,1.,1.) ):
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def generation_grid_quadri_and_connectivity(X, Y, Nx, Ny):
+def generation_grid_quadri_and_connectivity(x, y):
     """
-    X : lim of the grid in the first direction
-    Y : lim of the grid in the second direction
-    Nx : number of cells wanted along first axis
-    Ny : number of cells wanted along second axis
+    x : vertices cells in X direction
+    y : vertices cells in Y direction
     """
-    assert Nx > 0
-    assert Ny > 0
-    nx = Nx + 1
-    ny = Ny + 1
-    x = np.linspace(X[0], X[1], nx)
-    y = np.linspace(Y[0], Y[1], ny)
+    nx = len(x)
+    ny = len(y)
+    Nx = nx -1
+    Ny = ny -1
     # ATTENTION : the x coordinates are read along columns and the y along axis 0 !
-    coord = zeros((nx , ny, 2), dtype = float)
-    for i in range(coord.shape[0]):
-        for j in range(coord.shape[1]):
-            coord[i,j] = [x[i], y[j]]
+    coord = np.meshgrid(x,y)
+    C = zeros(coord[0].shape + (2,))
+    C[:,:,0] = coord[0]
+    C[:,:,1] = coord[1]
 
-    nID = np.arange(nx * ny).reshape((ny,nx))
     # ATTENTION: check the grid_cell array to understand why Ny and Nx are inverted
+    nID = np.arange(nx * ny).reshape((ny,nx))
+    assert nID.shape == C.shape[:-1]
     grid_cell = np.arange(Nx * Ny).reshape(Ny, Nx)
+    grid_cell = grid_cell[::-1]
 
     # connectivity per cell
     Con = zeros((Nx * Ny, 4), dtype = int)
@@ -573,13 +573,8 @@ def generation_grid_quadri_and_connectivity(X, Y, Nx, Ny):
     Con[:,1] = nID[:-1, 1:].ravel()
     Con[:,2] = nID[1:, 1:].ravel()
     Con[:,3] = nID[1:, :-1].ravel()
-    Con = Con.reshape( (Ny, Nx, 4) )
-    # the connectivity is at this point given in terms of nID. We would like to have it directly in
-    # terms of indiced in the grid of nodes
-    #ConUnrav = array(np.unravel_index(Con, grid[0].shape ))
-    #plot_cells_regular_grid(grid , ConUnrav, In2D = True)
 
-    return coord, Con, grid_cell
+    return C , Con, grid_cell
 
 
 #------------------------------------------------------------------------------
@@ -591,8 +586,9 @@ def plot_cells_regular_grid(grid, Con, In2D = False):
     """
     if In2D:
         import matplotlib.pylab as plt
-    plt.close('all')
-    ncel = Con[0].shape[0]
+        plt.close('all')
+
+    ncel = np.product(Con.shape[:-1])
 
     for i in range(ncel):
         xCell = getCellVertices(i, grid, Con)
@@ -608,33 +604,45 @@ def plot_cells_regular_grid(grid, Con, In2D = False):
             mlab.plot3d(xCell[:,0],
                     xCell[:,1],
                     xCell[:,2])
-            mlab.points3d(xCenter[0], xCenter[1],xCenter[1])
+            #mlab.points3d(xCenter[0], xCenter[1],xCenter[1])
     if In2D: plt.pause(1e-5)
 
 
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def getCellVertices(cell, grid, Con):
-    ii, jj = np.unravel_index(cell, Con.shape[:-1])
-    nIDs = Con[ii][jj]
+def getCellVertices(cell, grid, con):
+    assert grid.shape[-1] == 3
+    nIDs = con[cell]
+    assert len(nIDs) == 4
     nIDs = np.unravel_index(nIDs, grid.shape[:-1])
-    return grid[nIDs ]
+    return grid[nIDs]
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def plot_cell(grid, cell, con, color = (1.,0.,0.)):
+    X =  getCellVertices(cell, grid, con)
+    assert X.shape == (4,3)
+    X = np.vstack((X, X[0]))
+    return mlab.plot3d(X[:,0], X[:,1], X[:,2], color = color, tube_radius = None)
 
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
 def recursive_AABB(\
-        ncells,
         xvertex0,
         xvertex1,
         connectivity,
         grid_cell):
 
-    assert ncells.shape == (2,)
+    ncells = grid_cell.shape
+
     nvrtx0, nvrtx1 = [ncells[0] + 1, ncells[1] + 1]
     for vrtx in (xvertex0, xvertex1,):
         assert vrtx.shape == (nvrtx0 , nvrtx1, 3)
+
+    con_init_shape = connectivity.shape
 
     pairs_chunks_to_check = ones((1,1,1,1), dtype = bool)
     collision_chunks = np.zeros(pairs_chunks_to_check.shape, dtype = bool)
@@ -644,25 +652,21 @@ def recursive_AABB(\
 
     while True:
         for (ii,jj,kk,ll) in np.argwhere( pairs_chunks_to_check ):
+            assert connectivity.shape == con_init_shape
+
             # get the coordinates of the vertices from the chunk of cells
             chunk_vrtx_coord_0 = get_vertices_from_chunk_cells(\
-                    xvertex0, connectivity, curr_chunk_cells[ii,jj])
+                    xvertex0, connectivity, curr_chunk_cells[ii,jj].flatten())
             chunk_vrtx_coord_1 = get_vertices_from_chunk_cells(\
-                    xvertex1, connectivity, curr_chunk_cells[kk,ll])
+                    xvertex1, connectivity, curr_chunk_cells[kk,ll].flatten())
             if not chunk_vrtx_coord_0.shape[0] == 0 and\
                     not chunk_vrtx_coord_1.shape[0] == 0:
                 # create AABBs
                 aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
                 aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
+                if collision_chunks[ii,jj, kk, ll]:
+                    raise ValueError('pair chunks already checked')
                 collision_chunks[ii,jj, kk, ll] = collision_AABB(aabb0, aabb1)
-                """
-                if ct > 0:
-                    aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
-                    aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
-                    plot_AABB(aabb0 , s_in = 1/(ct + 1) )
-                    plot_AABB(aabb1 , s_in=  1/(ct + 1) )
-                    set_trace()
-                """
 
 
         if np.argwhere(collision_chunks).shape[0] == 0:
@@ -674,22 +678,23 @@ def recursive_AABB(\
             # intersecting with anything
 
             if ct > 0 and np.all(el_per_chunk_xi<=1) and np.all(el_per_chunk_theta<=1):
-                # graphical checking
-                """
-                for (ii,jj,kk,ll) in np.argwhere(collision_chunks):
-                    chunk_vrtx_coord_0 = get_vertices_from_chunk_cells(\
-                            xvertex0, connectivity, curr_chunk_cells[ii,jj])
-                    chunk_vrtx_coord_1 = get_vertices_from_chunk_cells(\
-                            xvertex1, connectivity, curr_chunk_cells[kk,ll])
-                    assert chunk_vrtx_coord_0.shape == (4,3)
-                    assert chunk_vrtx_coord_1.shape == (4,3)
-                    # create AABBs
+                set_trace()
+                scatter3d(xvertex0.reshape(-1,3), mode = 'point', color = (1.,1.,1.))
+                scatter3d(xvertex1.reshape(-1,3), mode = 'point', color = (1.,1.,1.))
+                for (kk,ll,mm,nn) in np.argwhere(collision_chunks):
+                    cell0 = np.ravel_multi_index((kk,ll), ncells)
+                    cell1 = np.ravel_multi_index((mm,nn), ncells)
+                    color = tuple(np.random.rand(3))
+                    plot_cell(xvertex0, cell0  , connectivity, color = color)
+                    plot_cell(xvertex1, cell1  , connectivity, color = color)
+
+                    #plot_cells_regular_grid(xvertex0,connectivity)
                     aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
                     aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
-                    plot_AABB(aabb0 , s_in = 0. )
-                    plot_AABB(aabb1 , s_in=  1. )
-                """
-
+                    plot_AABB(aabb0 , s_in = 1/(ct + 1) )
+                    plot_AABB(aabb1 , s_in=  1/(ct + 1) )
+                    scatter3d(chunk_vrtx_coord_0.reshape(-1,3), mode = 'sphere', color = (1.,0.,0.))
+                    scatter3d(chunk_vrtx_coord_1.reshape(-1,3), mode = 'sphere', color = (1.,1.,0.))
                 return 1, np.argwhere(collision_chunks)
 
             nchunk += 1
@@ -699,6 +704,7 @@ def recursive_AABB(\
             # el per chunk
             el_per_chunk_xi = array([len(chunk_xii) for chunk_xii in chunk_xi])
             el_per_chunk_theta = array( [len(chunk_thetai) for chunk_thetai in chunk_theta])
+
             if np.any(el_per_chunk_xi ==0):
                 el_per_chunk_xi = np.delete(el_per_chunk_xi, np.argwhere(el_per_chunk_xi == 0))
             if np.any(el_per_chunk_theta ==0):
@@ -725,8 +731,10 @@ def recursive_AABB(\
 #
 #-----------------------------------------------------------------------------
 def get_vertices_from_chunk_cells(grid, Con, cells):
-    Xvert = zeros((cells.flatten().shape + (4, 3) ) )
-    for ii, cell in enumerate(cells.flatten()):
+    assert cells.ndim == 1, 'provide flattened list of ids of cells'
+    assert np.array_equal(np.sort(cells), np.unique(cells))
+    Xvert = zeros((cells.shape + (4, 3) ) )
+    for ii, cell in enumerate(cells):
         Xvert[ii] =  getCellVertices( cell, grid, Con)
     return Xvert
 

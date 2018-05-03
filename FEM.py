@@ -444,7 +444,7 @@ class Model():
         for ii in self.slave_curves_ids:
             for jj in self.master_curves_ids:
                 cells_collide, id_cells =\
-                        Utilities.recursive_AABB(Tab.ncells,
+                        Utilities.recursive_AABB(
                                 self.grid_surf_points[ii],
                                 self.grid_surf_points[jj],
                                 Tab.cell_connectivity,
@@ -456,23 +456,42 @@ class Model():
                     assert id_cells.ndim == 2 and id_cells.shape[1] == 4
                     cells_intersec['id_cells'].append(id_cells)
 
-                    for (ii,jj,kk,ll) in id_cells:
+                    """
+                    glyph0 = Utilities.scatter3d(
+                            self.grid_surf_points[ii].reshape(-1,3),
+                            color = (1., 1., 0.),
+                            mode = 'point')
+                    glyph1 = Utilities.scatter3d(
+                            self.grid_surf_points[jj].reshape(-1,3),
+                            color = (0., 1., 0.),
+                            mode='point')
+                    """
+
+                    for (kk,ll,mm,nn) in id_cells:
+
                         # TODO : unnecessary operation because the table of connectivity uses
                         # unravelled indices
-                        cell_i = np.ravel_multi_index((ii,jj ), Tab.grid_cell.shape )
-                        cell_j = np.ravel_multi_index((kk,ll ), Tab.grid_cell.shape )
-                        set_trace()
+                        cell_0 = np.ravel_multi_index((kk,ll ), Tab.grid_cell.shape )
+                        cell_1 = np.ravel_multi_index((mm,nn ), Tab.grid_cell.shape )
+                        # draw the cells
+                        plot_cell(self.grid_surf_points[ii] , cell_0, Tab.cell_connectivity, color = (1.,0.,0.))
+
+                        plot_cell(self.grid_surf_points[jj] , cell_1, Tab.cell_connectivity, color = (1.,1.,0.))
                         chunk_vrtx_coord_0 = get_vertices_from_chunk_cells(\
                                 self.grid_surf_points[ii],Tab.cell_connectivity,
-                                cell_i)
+                                array([cell_0]))
                         chunk_vrtx_coord_1 = get_vertices_from_chunk_cells(\
                                 self.grid_surf_points[jj],Tab.cell_connectivity,
-                                cell_j)
+                                array([cell_1]))
                         # create AABBs
                         aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
                         aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
+                        # DO NOT REMOVE THIS CHECK
+                        assert Utilities.collision_AABB(aabb0, aabb1)
+
                         plot_AABB(aabb0 , s_in = 0. )
                         plot_AABB(aabb1 , s_in=  1. )
+                        set_trace()
         return cells_intersec
 
     #------------------------------------------------------------------------------
@@ -481,7 +500,7 @@ class Model():
     def generate_surface_grid_all_curves(self):
         # construct slave obb around entire slave curve
         Tab = self.ContactTable
-        self.grid_surf_points = zeros((self.nCurves, Tab.ncells[0] + 1, Tab.ncells[1] + 1 , 3 ), dtype = float)
+        self.grid_surf_points = zeros((self.nCurves, Tab.ncells_theta + 1, Tab.ncells_xi + 1 , 3 ), dtype = float)
         for i in range(self.nCurves):
             self.grid_surf_points[i] = self.get_cell_vertices_coord(i)
 
@@ -1988,8 +2007,9 @@ class Model():
         Tab = self.ContactTable
         id_els = self.el_per_curves[id_c]
         nd_C =  self.nPerEl[id_els,].flatten()[(0,1,3),]
-        pos = zeros((Tab.xi_vert.shape[0] ,\
-                Tab.theta_vert.shape[0] , 3), dtype = np.double)
+
+        pos = zeros((Tab.theta_vert.shape[0] ,\
+                Tab.xi_vert.shape[0] , 3), dtype = np.double)
 
         GeoSmooth.samplePointsOnSurface(\
             self.X[nd_C,].ravel(),\
@@ -2003,6 +2023,7 @@ class Model():
             Tab.xi_vert,# xis and thetas already computed
             Tab.theta_vert,
             pos)
+
         return pos
 
 
