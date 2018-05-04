@@ -121,7 +121,7 @@ class ContactTable():
         # TRAP: to go to the next cell in the xi direction, we change column
         # to go to the next cell in the theta direction, we change row
         assert self.grid_cell.shape == (self.ncells_theta, self.ncells_xi)
-        assert np.array_equal(array(Tab.grid_cell_vert.shape[:-1]) - 1, array(self.grid_cell.shape))
+        assert np.array_equal(array(self.conv_coord_grid.shape[:-1]) - 1, array(self.grid_cell.shape))
 
         self.active_set = []
         self.is_set_parameter_weak_enforcement = True

@@ -601,9 +601,26 @@ class Model():
             mstr_dom = Tab.grid_cell[row_min_mstr:row_max_mstr + 1,
                     col_min_mstr:col_max_mstr+1].ravel()
             samp_pts_mstr = []
-            for cell in mstr_dom.ravel():
-                samp_pts_mstr.append( sample_points_on_cell(master, cell, nxi_s = 10, ntheta_s = 10))
+            nxi_s = 10
+            ntheta_s = 10
+            self.plot(opacity = 0.3)
+            for cell in sl_dom:
+                self.plot_cell(slave, cell, color = (1.,0.,0.))
+            for cell in mstr_dom :
+                self.plot_cell(master, cell, color = (0.,1.,1.))
+            set_trace()
 
+
+            for cell in mstr_dom.ravel():
+                smp_cell = self.sample_points_on_cell(master, cell, nxi_s, ntheta_s)
+                samp_pts_mstr.append(smp_cell)
+                Utilities.scatter3d(smp_cell.reshape(-1,3))
+                set_trace()
+
+            ncell = len(mstr_dom.ravel())
+            samp_pts_mstr = np.concatenate([samp_pts_mstr[i] for i in range(ncell)]).reshape(-1,3)
+            assert samp_pts_mstr.shape == (ncell * nxi_s * ntheta_s, 3)
+            set_trace()
 
             for cell in sl_dom.ravel():
                 for i in range(Tab.nxiGQP):
@@ -1189,6 +1206,15 @@ class Model():
                 f.scene.camera.view_up = self.camera_settings['view_up']
                 f.scene.camera.clipping_range = self.camera_settings['clipping_range']
             f.scene.disable_render = False
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def plot_cell(self, id_c, cell, color = (1.,0.,0.) ):
+        self.generate_surface_grid_all_curves()
+        Tab= self.ContactTable
+        return Utilities.plot_cell(self.grid_surf_points[id_c], cell, Tab.cell_connectivity, color)
 
 
     #------------------------------------------------------------------------------
@@ -2075,22 +2101,26 @@ class Model():
         Tab = self.ContactTable
 
         # cell info
-        if isinstance(cell_id, int):
-            cell_id = np.unravel_index(cell_id, Tab.
-        assert cell_id.shape == (1,1)
-        vID_CELL = np.unravel_index(vID_CELL)
+        c_id_ravelled = cell_id
+        if not (type(cell_id) is np.ndarray) or (cell_id.shape != (1,1)):
+            cell_id = np.unravel_index(cell_id, Tab.grid_cell.shape)
+        assert array(cell_id).shape == (2,)
+        assert Tab.grid_cell[cell_id] == c_id_ravelled
         vID_CELL = Tab.cell_connectivity[cell_id]
-        assert vID_CELL.shape == (4,)
+        vID_CELL = np.unravel_index(vID_CELL, Tab.conv_coord_grid.shape[:-1] )
+        for i in range(2):
+            assert vID_CELL[i].shape == (4,)
         XI_CELL = Tab.conv_coord_grid[vID_CELL]
-        XI_CELL = XI_CELL.reshape(-1,4)
         ximin = np.min(XI_CELL[:,0])
         ximax = np.max(XI_CELL[:,0])
         assert np.all(XI_CELL[:,0] <= 1)
-        xi = np.linspace(ximin, xmax, nxi_s)
-        theta = np.linspace(thetamin, xmax, ntheta_s)
+        thetamin = np.min(XI_CELL[:,1])
+        thetamax = np.max(XI_CELL[:,1])
+        xi = np.linspace(ximin, ximax, nxi_s)
+        theta = np.linspace(thetamin, thetamax, ntheta_s)
 
         # curve info
-        id_els = self.el_per_curves[id_c]
+        id_els = self.el_per_curves[id_c].flatten()
         nd_C =  self.nPerEl[id_els,].flatten()[(0,1,3),]
 
         pos = zeros(( nxi_s, ntheta_s , 3), dtype = np.double)
@@ -2104,8 +2134,8 @@ class Model():
             self.a_crossSec[id_els][0],\
             self.b_crossSec[id_els][0],\
             self.ContactTable.alpha,\
-            xis,
-            thetas,
+            xi,
+            theta,
             pos)
 
         return pos
