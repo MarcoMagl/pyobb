@@ -516,13 +516,93 @@ class Model():
         """
         return bool to state if there has been some modification of the active set
         """
-        if not self.is_set_ContactTable:
-            raise ValueError('The contact table must be set! Use set_Contact_Table method ')
-        # ABB intersection
-        cells_intersect = self.broad_phase()
-        AS_correct = self.narrow_phase(cells_intersect)
+        brute_force = True
+        if not brute_force:
+            raise NotImplementedError('Deprecated')
+            if not self.is_set_ContactTable:
+                raise ValueError('The contact table must be set! Use set_Contact_Table method ')
+            # ABB intersection
+            cells_intersect = self.broad_phase()
+            AS_correct = self.narrow_phase(cells_intersect)
+        else:
+            # only restricted to a few number of curves
+            if self.nCurves > 2: raise ValueError('too many curves for this expensive approach')
+            fc,Kc,GN = self.narrow_phase_between_2_curves(self.slave_curves_ids[0] , self.master_curves_ids[0] )
+            set_trace()
+
         assert isinstance(AS_correct, bool)
         return AS_correct
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def narrow_phase_between_2_curves(self, slv, mstr):
+
+        Tab = self.ContactTable
+        nxiGQP = Tab.nxiGQP
+        nthetaGQP= Tab.nthetaGQP
+        nuxiGQP, WnuxiGQP =  np.polynomial.legendre.leggauss(nxiGQP)
+        nuthetaGQP, WnuthetaGQP =\
+        np.polynomial.legendre.leggauss(nthetaGQP)
+        assert self.nCurves == 2
+
+        GN = zeros((Tab.nthetaGQP, Tab.nxiGQP), dtype = float)
+
+        xi_lim_slv, theta_lim_slv =array([0,1.]), array([0, 2 * np.pi])
+
+        id_els_slv = self.el_per_curves[slv]
+        id_els_mstr = self.el_per_curves[mstr]
+
+        ntheta_sp, nxi_sp = 10, 5
+        xi_lp = np.linspace(0, 1, nxi_sp)
+        theta_lp = np.linspace(0, 2 * np.pi, ntheta_sp)
+        grid_conv = np.meshgrid(xi_lp, theta_lp)
+
+        samp_mstr = self.sample_surf_point_on_smooth_geo(\
+                self.el_per_curves[slv], nxi_sp,\
+                ntheta_sp, array([0,1]),
+            array([0,2*np.pi]))
+
+        kN = Tab.kNmin
+        current_curves = array([slv, mstr])
+        # prealloc for contribution of all elements
+        fc = zeros(36)
+        Kc = zeros((36, 36))
+
+        set_trace()
+        for (ii,jj) in product(range(nxiGQP), range(nthetaGQP)):
+            xiGQP, WxiGQP= TransformationQuadraturePointsAndWeigths1D(\
+                     xi_lim_slv , nuxiGQP[ii], WnuxiGQP[ii])
+            thetaGQP, WthetaGQP = TransformationQuadraturePointsAndWeigths1D(\
+                     theta_lim_slv, nuthetaGQP[jj], WnuthetaGQP[jj])
+            xGQP = self.get_surf_point_smoothed_geo(mstr, array([xiGQP, thetaGQP ]))
+            # get FG
+            Dist = norm((samp_mstr - xGQP), axis = 2)
+            idx = np.unravel_index( Dist.argmin(), samp_mstr.shape[:2])
+            xi_m_FG, theta_m_FG = grid_conv[0][idx], grid_conv[1][idx]
+            hFG = array([xi_m_FG, theta_m_FG] )
+            xFG = self.get_surf_point_smoothed_geo(slv, hFG )
+            assert norm(xFG - xGQP) == Dist.min()
+
+            (hSol, fij, Kij, gN, ExitCode, Contri_sl, fl, iterLoc )=\
+                    self.contri1GQP_Int2Int(\
+                    current_curves,\
+                    hFG,
+                    xiGQP,\
+                    WxiGQP,\
+                    thetaGQP,\
+                    WthetaGQP,\
+                    kN)
+            GN[ii,jj] = gN
+            fc += fij
+            Kc += Kij
+
+        assert not np.any(np.isnan(fc))
+        assert not np.any(np.isnan(Kc))
+        assert np.allclose(array(Kc), array(Kc).T)
+        return fc, Kc, GN
+
 
     #------------------------------------------------------------------------------
     #
@@ -604,10 +684,19 @@ class Model():
             nxi_s = 10
             ntheta_s = 10
             self.plot(opacity = 0.3)
-            for cell in sl_dom:
-                self.plot_cell(slave, cell, color = (1.,0.,0.))
-            for cell in mstr_dom :
-                self.plot_cell(master, cell, color = (0.,1.,1.))
+            for cell in Tab.grid_cell.ravel():
+                if cell in sl_dom:
+                    color = (1.,0.,0.)
+                else:
+                    color = (1., 0.,0.)
+                self.plot_cell(slave, cell, color = color)
+
+            for cell in Tab.grid_cell.ravel():
+                if cell in mstr_dom:
+                    color = (1.,0.,0.)
+                else:
+                    color = (1., 0.,0.)
+                self.plot_cell(master, cell, color = color)
             set_trace()
 
 
@@ -2009,7 +2098,8 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def get_surf_point_smoothed_geo(self, id_els, h):
+    def get_surf_point_smoothed_geo(self, id_c, h):
+        id_els = self.el_per_curves[id_c]
         b1,b2 = self.el[id_els,]
         nd_C = asarray([b1.nID[0], b1.nID[1], b2.nID[1]]).ravel()
         return array( GeoSmooth.SurfPoint(\
@@ -2052,7 +2142,7 @@ class Model():
         assert xi_lim.shape == (2,)
         assert theta_lim.shape == (2,)
         nd_C =  self.nPerEl[id_els,].flatten()[(0,1,3),]
-        pos = zeros((nxi, ntheta, 3), dtype = np.double)
+        pos = zeros((ntheta, nxi, 3), dtype = np.double)
         GeoSmooth.samplePointsOnSurface(\
             self.X[nd_C,].ravel(),\
             self.u[nd_C,].ravel(),\
