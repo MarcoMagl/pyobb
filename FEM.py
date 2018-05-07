@@ -548,21 +548,25 @@ class Model():
         assert self.nCurves == 2
 
         GN = zeros((Tab.nthetaGQP, Tab.nxiGQP), dtype = float)
+        HBAR = zeros(GN.shape + (2,) , dtype = float)
+        HQP = zeros(GN.shape + (2,) , dtype = float)
 
         xi_lim_slv, theta_lim_slv =array([0,1.]), array([0, 2 * np.pi])
 
         id_els_slv = self.el_per_curves[slv]
         id_els_mstr = self.el_per_curves[mstr]
 
-        ntheta_sp, nxi_sp = 10, 5
+        ntheta_sp, nxi_sp = 10, 20
         xi_lp = np.linspace(0, 1, nxi_sp)
         theta_lp = np.linspace(0, 2 * np.pi, ntheta_sp)
         grid_conv = np.meshgrid(xi_lp, theta_lp)
 
         samp_mstr = self.sample_surf_point_on_smooth_geo(\
-                self.el_per_curves[slv], nxi_sp,\
+                self.el_per_curves[mstr], nxi_sp,\
                 ntheta_sp, array([0,1]),
             array([0,2*np.pi]))
+
+        Utilities.scatter3d(samp_mstr.reshape(-1,3), color = (0.,1.,0.))
 
         kN = Tab.kNmin
         current_curves = array([slv, mstr])
@@ -570,19 +574,20 @@ class Model():
         fc = zeros(36)
         Kc = zeros((36, 36))
 
-        set_trace()
+        self.plot(opacity=0.2)
+
         for (ii,jj) in product(range(nxiGQP), range(nthetaGQP)):
             xiGQP, WxiGQP= TransformationQuadraturePointsAndWeigths1D(\
                      xi_lim_slv , nuxiGQP[ii], WnuxiGQP[ii])
             thetaGQP, WthetaGQP = TransformationQuadraturePointsAndWeigths1D(\
                      theta_lim_slv, nuthetaGQP[jj], WnuthetaGQP[jj])
-            xGQP = self.get_surf_point_smoothed_geo(mstr, array([xiGQP, thetaGQP ]))
+            xGQP = self.get_surf_point_smoothed_geo(slv, array([xiGQP, thetaGQP ]))
             # get FG
             Dist = norm((samp_mstr - xGQP), axis = 2)
             idx = np.unravel_index( Dist.argmin(), samp_mstr.shape[:2])
             xi_m_FG, theta_m_FG = grid_conv[0][idx], grid_conv[1][idx]
             hFG = array([xi_m_FG, theta_m_FG] )
-            xFG = self.get_surf_point_smoothed_geo(slv, hFG )
+            xFG = self.get_surf_point_smoothed_geo(mstr, hFG )
             assert norm(xFG - xGQP) == Dist.min()
 
             (hSol, fij, Kij, gN, ExitCode, Contri_sl, fl, iterLoc )=\
@@ -594,14 +599,77 @@ class Model():
                     thetaGQP,\
                     WthetaGQP,\
                     kN)
+            assert ExitCode == 1
+            """
+            # TODO : add check to verify we indeed get the same pder
+            self.fullLocScheme(current_curves, array([xiGQP, thetaGQP]) ,
+            array(hSol))
+
+            mlab.points3d(xFG[0], xFG[1], xFG[2], mode = 'point', color = (1.,0.,.0))
+            mlab.points3d(xGQP[0], xGQP[1], xGQP[2], mode = 'point', color = (1.,1.,.0))
+            xSol = self.get_surf_point_smoothed_geo(mstr, array(hSol))
+            mlab.points3d(xSol[0], xSol[1], xSol[2], mode = 'point', color = (1.,1.,.1))
+            set_trace()
+            """
             GN[ii,jj] = gN
+            HBAR[ii,jj] = hSol
+            HQP[ii,jj] = array([xiGQP, thetaGQP])
             fc += fij
             Kc += Kij
 
+        # graph check
+        self.plot(opacity=0.2)
+        self.plot_lines_between_pair_surface(slv, mstr, HQP, HBAR, GN)
+        set_trace()
         assert not np.any(np.isnan(fc))
         assert not np.any(np.isnan(Kc))
         assert np.allclose(array(Kc), array(Kc).T)
         return fc, Kc, GN
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def plot_lines_between_pair_surface(self, idc_0, idc_1, h_c0, h_c1, GN):
+        shape_arr = h_c0.shape[:2]
+        x0 = zeros(shape_arr + (3,) , dtype = float)
+        x1 = zeros(shape_arr + (3,) , dtype = float)
+        assert x0.shape[:2] == GN.shape
+        for i in range(shape_arr[0]):
+            for j in range(shape_arr[1]):
+                x0[i,j] = self.get_surf_point_smoothed_geo(idc_0, h_c0[i,j])
+                x1[i,j] = self.get_surf_point_smoothed_geo(idc_1, h_c1[i,j])
+
+        # Create the points
+        x0 = x0.reshape(-1,3)
+        x1 = x1.reshape(-1,3)
+        GN = GN.flatten()
+        x = np.vstack( (x0[:,0],  x1[:,0])).T.ravel()
+        y = np.vstack( (x0[:,1],  x1[:,1])).T.ravel()
+        z = np.vstack( (x0[:,2],  x1[:,2])).T.ravel()
+        s = np.vstack( (GN,  GN)).T.flatten()
+        src = mlab.pipeline.scalar_scatter(x, y, z, s)
+        connections = np.arange(2 * x0.shape[0]).reshape(-1,2)
+        # Connect them
+        src.mlab_source.dataset.lines = connections
+        # The stripper filter cleans up connected lines
+        lines = mlab.pipeline.stripper(src)
+
+        src.update()
+        # Finally, display the set of lines
+        mlab.pipeline.surface(lines, colormap='Accent', line_width=1, opacity=.4)
+        scalar_lut_manager = lines.children[0].scalar_lut_manager
+        scalar_lut_manager.show_scalar_bar = True
+        scalar_lut_manager.data_name = 'gN'
+
+        mlab.points3d(\
+                x0[:,0],
+                x0[:,1],
+                x0[:,2], mode = 'point',\
+                        color = (1.,1.,1.) )
+
+
+
 
 
     #------------------------------------------------------------------------------
