@@ -224,6 +224,12 @@ class Solver():
         while True:
             converged = 0
             failure_stp = 0
+            if self.stp > 0 and self.stp % 10 == 0:
+                FEM.plot()
+                set_trace()
+                FEM.choose_active_set()
+            if self.stp > 0 and self.stp % 10 == 0:
+                FEM.CheckContinuitySurface()
             while not converged:
                 t = float(self.tn + Loading.DELt)
                 if t > Loading.tfinal:

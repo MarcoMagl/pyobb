@@ -405,7 +405,32 @@ class Model():
         # Contribution from contact between yarns
         #------------------------------------------------------------------------------
         if self.HasConstraints:
-            self.weak_enforcement_IntInt2IntInt(fint, K)
+            if not self.brute_force:
+                self.weak_enforcement_IntInt2IntInt(fint, K)
+            else:
+                # only restricted to a few number of curves
+                if self.nCurves > 2: raise ValueError('too many curves for this expensive approach')
+                slv, mstr = self.slave_curves_ids[0] , self.master_curves_ids[0]
+                fc,Kc,GN = self.narrow_phase_between_2_curves(slv, mstr)
+                assert fc.shape == (36,)
+                assert Kc.shape == (36, 36)
+                # nodes used for the first curve
+                id_els = self.el_per_curves[(slv,mstr),].ravel()
+                nd_C1 =  self.nPerEl[id_els[(0,1),]].flatten()[(0,1,3),]
+                nd_C2 =  self.nPerEl[id_els[(2,3),]].flatten()[(0,1,3),]
+                dofs_ctc_el = np.concatenate((self.dperN[nd_C1,],self.dperN[nd_C2,])).ravel()
+                assert dofs_ctc_el.shape == (36,)
+                if np.any(GN < 0):
+                    #self.plot()
+                    assert norm(fc) > 0
+                    assert norm(Kc) > 0
+                    # the slave assembly should not have any force in the x direction
+                    assert norm(fc[:18].reshape(-1 , 6 )[:, 2,] ) < 1e-10
+                    # the master assembly should not have any force in the z direction
+                    assert norm(fc[18:].reshape(-1 , 6 )[:, 0,] ) < 1e-10
+                fint[dofs_ctc_el] += fc
+                K[ix_(dofs_ctc_el, dofs_ctc_el)] += Kc
+
             """
             # plot all the contact points
             self.plot_all_contact()
@@ -516,19 +541,24 @@ class Model():
         """
         return bool to state if there has been some modification of the active set
         """
-        brute_force = True
-        if not brute_force:
+        Tab = self.ContactTable
+        self.brute_force = True
+        if not self.brute_force:
             raise NotImplementedError('Deprecated')
             if not self.is_set_ContactTable:
                 raise ValueError('The contact table must be set! Use set_Contact_Table method ')
             # ABB intersection
             cells_intersect = self.broad_phase()
             AS_correct = self.narrow_phase(cells_intersect)
+            set_trace()
         else:
             # only restricted to a few number of curves
             if self.nCurves > 2: raise ValueError('too many curves for this expensive approach')
-            fc,Kc,GN = self.narrow_phase_between_2_curves(self.slave_curves_ids[0] , self.master_curves_ids[0] )
-            set_trace()
+            _,_,GN = self.narrow_phase_between_2_curves(self.slave_curves_ids[0] , self.master_curves_ids[0] )
+            AS_correct = True
+            if np.any(GN < Tab.maxPenAllow):
+                set_trace()
+                AS_correct = False
 
         assert isinstance(AS_correct, bool)
         return AS_correct
@@ -547,26 +577,38 @@ class Model():
         np.polynomial.legendre.leggauss(nthetaGQP)
         assert self.nCurves == 2
 
-        GN = zeros((Tab.nthetaGQP, Tab.nxiGQP), dtype = float)
+        xi_lim_slv, theta_lim_slv =array([0,1.]), array([0, 2 * np.pi])
+
+        xiGQP = zeros(nxiGQP)
+        WxiGQP = zeros(nxiGQP)
+        for i in range(nxiGQP):
+            xiGQP[i], WxiGQP[i]= TransformationQuadraturePointsAndWeigths1D(\
+                     xi_lim_slv , nuxiGQP[i], WnuxiGQP[i])
+
+        thetaGQP = zeros(nthetaGQP)
+        WthetaGQP = zeros(nthetaGQP)
+        for j in range(nthetaGQP):
+            thetaGQP[j], WthetaGQP[j]= TransformationQuadraturePointsAndWeigths1D(\
+                     theta_lim_slv , nuthetaGQP[j], WnuthetaGQP[j])
+
+
+        GN = zeros((Tab.nxiGQP , Tab.nthetaGQP), dtype = float)
         HBAR = zeros(GN.shape + (2,) , dtype = float)
         HQP = zeros(GN.shape + (2,) , dtype = float)
 
-        xi_lim_slv, theta_lim_slv =array([0,1.]), array([0, 2 * np.pi])
 
         id_els_slv = self.el_per_curves[slv]
         id_els_mstr = self.el_per_curves[mstr]
 
-        ntheta_sp, nxi_sp = 10, 20
-        xi_lp = np.linspace(0, 1, nxi_sp)
-        theta_lp = np.linspace(0, 2 * np.pi, ntheta_sp)
-        grid_conv = np.meshgrid(xi_lp, theta_lp)
+        ntheta_sp, nxi_sp = 20, 20
+        xi_sp = np.linspace(0, 1, nxi_sp)
+        theta_sp = np.linspace(0, 2 * np.pi, ntheta_sp)
+        grid_conv = np.meshgrid(xi_sp, theta_sp)
 
         samp_mstr = self.sample_surf_point_on_smooth_geo(\
                 self.el_per_curves[mstr], nxi_sp,\
                 ntheta_sp, array([0,1]),
             array([0,2*np.pi]))
-
-        Utilities.scatter3d(samp_mstr.reshape(-1,3), color = (0.,1.,0.))
 
         kN = Tab.kNmin
         current_curves = array([slv, mstr])
@@ -574,53 +616,78 @@ class Model():
         fc = zeros(36)
         Kc = zeros((36, 36))
 
-        self.plot(opacity=0.2)
-
         for (ii,jj) in product(range(nxiGQP), range(nthetaGQP)):
-            xiGQP, WxiGQP= TransformationQuadraturePointsAndWeigths1D(\
-                     xi_lim_slv , nuxiGQP[ii], WnuxiGQP[ii])
-            thetaGQP, WthetaGQP = TransformationQuadraturePointsAndWeigths1D(\
-                     theta_lim_slv, nuthetaGQP[jj], WnuthetaGQP[jj])
-            xGQP = self.get_surf_point_smoothed_geo(slv, array([xiGQP, thetaGQP ]))
+            xGQP = self.get_surf_point_smoothed_geo(slv, array([xiGQP[ii], thetaGQP[jj] ]))
             # get FG
             Dist = norm((samp_mstr - xGQP), axis = 2)
             idx = np.unravel_index( Dist.argmin(), samp_mstr.shape[:2])
             xi_m_FG, theta_m_FG = grid_conv[0][idx], grid_conv[1][idx]
             hFG = array([xi_m_FG, theta_m_FG] )
             xFG = self.get_surf_point_smoothed_geo(mstr, hFG )
-            assert norm(xFG - xGQP) == Dist.min()
+            dFG = norm(xFG - xGQP)
+            assert dFG  == Dist.min()
 
             (hSol, fij, Kij, gN, ExitCode, Contri_sl, fl, iterLoc )=\
-                    self.contri1GQP_Int2Int(\
-                    current_curves,\
+                    self.contri1GQP_Int2Int( current_curves,\
+                    xiGQP[ii],\
+                    thetaGQP[jj],\
+                    WxiGQP[ii],\
+                    WthetaGQP[jj],\
                     hFG,
-                    xiGQP,\
-                    WxiGQP,\
-                    thetaGQP,\
-                    WthetaGQP,\
                     kN)
-            assert ExitCode == 1
             """
             # TODO : add check to verify we indeed get the same pder
-            self.fullLocScheme(current_curves, array([xiGQP, thetaGQP]) ,
-            array(hSol))
 
-            mlab.points3d(xFG[0], xFG[1], xFG[2], mode = 'point', color = (1.,0.,.0))
-            mlab.points3d(xGQP[0], xGQP[1], xGQP[2], mode = 'point', color = (1.,1.,.0))
-            xSol = self.get_surf_point_smoothed_geo(mstr, array(hSol))
-            mlab.points3d(xSol[0], xSol[1], xSol[2], mode = 'point', color = (1.,1.,.1))
-            set_trace()
             """
+            xSol = self.get_surf_point_smoothed_geo(mstr, array(hSol))
+            #dSol = norm(xFG - xSol)
+            try:
+                #assert dSol <= dFG
+                assert ExitCode == 1
+            except AssertionError:
+                set_trace()
+                hSol2, fl2 = self.fullLocScheme(current_curves, array([xiGQP[ii], thetaGQP[jj]]) , array(hSol))
+                assert np.allclose(array(hSol), array(hSol2)), 'get different results starting from the same FG'
+                Utilities.scatter3d(samp_mstr.reshape(-1,3), color = (0.,1.,0.))
+                self.plot(opacity=0.2)
+                mlab.plot3d([xGQP[0], xFG[0]],
+                            [xGQP[1], xFG[1]],
+                            [xGQP[2], xFG[2]],
+                            tube_radius= None ,
+                            color = (1.,0.,0.))
+                mlab.plot3d([xGQP[0], xSol[0]],
+                            [xGQP[1], xSol[1]],
+                            [xGQP[2], xSol[2]],
+                            tube_radius= None ,
+                            color = (1.,1.,0.))
+
+                set_trace()
+
+
             GN[ii,jj] = gN
             HBAR[ii,jj] = hSol
-            HQP[ii,jj] = array([xiGQP, thetaGQP])
-            fc += fij
-            Kc += Kij
+            HQP[ii,jj] = array([xiGQP[ii], thetaGQP[jj]])
+            fij = array(fij)
+            assert len(fij) == 36
+
+            fc += array(fij)
+            Kc += array(Kij)
 
         # graph check
-        self.plot(opacity=0.2)
-        self.plot_lines_between_pair_surface(slv, mstr, HQP, HBAR, GN)
-        set_trace()
+        try:
+            assert norm(fc[:18].reshape(-1 , 6 )[:, 2,] ) < 1e-10
+        except AssertionError:
+            self.plot(opacity=0.2)
+            self.plot_lines_between_pair_surface(slv, mstr, HQP, HBAR, GN)
+
+            xGQP_test = zeros((HQP.shape[1], 3))
+            for jj in range(HQP.shape[1]):
+                xGQP_test[jj] = self.get_surf_point_smoothed_geo(slv, HQP[0, jj])
+            mlab.points3d(xGQP_test[:,0],
+                    xGQP_test[:,1],
+                    xGQP_test[:,2],
+                    scale_factor = 0.01, color = (0., 0., 1.) )
+            set_trace()
         assert not np.any(np.isnan(fc))
         assert not np.any(np.isnan(Kc))
         assert np.allclose(array(Kc), array(Kc).T)
@@ -670,8 +737,6 @@ class Model():
 
 
 
-
-
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
@@ -681,40 +746,25 @@ class Model():
         AS_correct = self.choose_active_set(stp)
         assert isinstance(AS_correct, bool)
 
-        if self.enforcement == 0:
-            # regularizes the penalty stiffnesses if necessary
-            try:
-                PenaltyCorrect = Tab.PenaltyRegularization()
-            except MaximumPenetrationError:
-                self.plot(opacity = 0.1)
-                idGQP = np.argwhere(Tab.gN < Tab.critical_penetration)
-                pts = self.plot_set_GQP(idGQP)
-                pts.glyph.glyph.scale_factor = 0.05
-                set_trace()
-                self.choose_active_set()
-                AS_correct = Tab.PenaltyRegularization()
-        if self.enforcement == 0:
-            return AS_correct and PenaltyCorrect
-        elif self.enforcement == 1:
+        if not self.brute_force:
+            if self.enforcement == 0:
+                # regularizes the penalty stiffnesses if necessary
+                try:
+                    PenaltyCorrect = Tab.PenaltyRegularization()
+                except MaximumPenetrationError:
+                    self.plot(opacity = 0.1)
+                    idGQP = np.argwhere(Tab.gN < Tab.critical_penetration)
+                    pts = self.plot_set_GQP(idGQP)
+                    pts.glyph.glyph.scale_factor = 0.05
+                    set_trace()
+                    self.choose_active_set()
+                    AS_correct = Tab.PenaltyRegularization()
+            if self.enforcement == 0:
+                return AS_correct and PenaltyCorrect
+            elif self.enforcement == 1:
+                return AS_correct
+        else:
             return AS_correct
-        """
-        if self.ContactTable.close_curves[mcurve_id, scurve_id]:
-            mlab.clf()
-            self.plot_pairs_of_smoothed_surface(self.el_per_curves[pair_curve],\
-                    opacity = 0.3)
-            for bY in [bYMii, bYSjj]:
-                vertices = np.asarray([i for i in product(bY[:,0], bY[:,1], bY[:,2])])
-                x,y,z = vertices.T[(0,1,2),]
-                glyph= mlab.points3d(x,y,z, color = (0.,1.,0.), scale_factor = 0.1)
-                engine = mlab.get_engine()
-                from mayavi.modules.outline import Outline
-                engine.add_filter(Outline(), glyph)
-            x,y,z = self.ctr_box[mcurve_id]
-            mlab.text3d(x,y,z,str(mcurve_id),scale = 0.1)
-            x,y,z = self.ctr_box[scurve_id]
-            mlab.text3d(x,y,z,str(scurve_id),scale=0.1)
-            set_trace()
-        """
 
     #------------------------------------------------------------------------------
     #
@@ -1608,8 +1658,9 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def plot_one_smoothed_surface(self, id_els, nxi=10, ntheta=10,
+    def plot_one_smoothed_surface(self, id_c, nxi=10, ntheta=10,
             color=(1.,0.,0.), opacity = 0.5):
+        id_els = self.el_per_curves[id_c,]
 
         pos = self.sample_surf_point_on_smooth_geo(id_els, nxi,
                 ntheta,\
@@ -2228,28 +2279,67 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def get_cell_vertices_coord(self, id_c):
+    def get_cell_vertices_coord(self, id_c, get_local_frame = False):
         Tab = self.ContactTable
         id_els = self.el_per_curves[id_c]
         nd_C =  self.nPerEl[id_els,].flatten()[(0,1,3),]
 
-        pos = zeros((Tab.theta_vert.shape[0] ,\
-                Tab.xi_vert.shape[0] , 3), dtype = np.double)
+        if not get_local_frame:
+            pos = zeros((Tab.theta_vert.shape[0] ,\
+                    Tab.xi_vert.shape[0] , 3), dtype = np.double)
 
-        GeoSmooth.samplePointsOnSurface(\
-            self.X[nd_C,].ravel(),\
-            self.u[nd_C,].ravel(),\
-            self.v[nd_C,].ravel(),\
-            self.t1[id_els,],\
-            self.t2[id_els,],\
-            self.a_crossSec[id_els][0],\
-            self.b_crossSec[id_els][0],\
-            self.ContactTable.alpha,\
-            Tab.xi_vert,# xis and thetas already computed
-            Tab.theta_vert,
-            pos)
+            GeoSmooth.samplePointsOnSurface(\
+                self.X[nd_C,].ravel(),\
+                self.u[nd_C,].ravel(),\
+                self.v[nd_C,].ravel(),\
+                self.t1[id_els,],\
+                self.t2[id_els,],\
+                self.a_crossSec[id_els][0],\
+                self.b_crossSec[id_els][0],\
+                self.ContactTable.alpha,\
+                Tab.xi_vert,# xis and thetas already computed
+                Tab.theta_vert,
+                pos)
 
-        return pos
+            return pos
+        else:
+            pos = zeros((Tab.theta_vert.shape[0] ,\
+                    Tab.xi_vert.shape[0] , 3), dtype = np.double)
+            x_xi = zeros(pos.shape)
+            x_theta = zeros(pos.shape)
+            n_ = zeros(pos.shape)
+            nxis = Tab.xi_vert.shape[0]
+            nthetas = Tab.theta_vert.shape[0]
+            grid_conv = np.meshgrid(Tab.xi_vert, Tab.theta_vert)
+
+            for i in range(nthetas):
+                for j in range(nxis):
+                    h = array([grid_conv[0][i,j], grid_conv[1][i,j]])
+                    s, sxi, stheta, n =\
+                    GeoSmooth.SurfAndVects(
+                        self.X[nd_C,].ravel(),\
+                        self.u[nd_C,].ravel(),\
+                        self.v[nd_C,].ravel(),\
+                        self.t1[id_els,],\
+                        self.t2[id_els,],\
+                        self.a_crossSec[id_els][0],\
+                        self.b_crossSec[id_els][0],\
+                        self.ContactTable.alpha,\
+                        h)
+                    pos[i,j] = s
+                    x_xi[i,j] = sxi
+                    x_theta[i,j] = stheta
+                    n_[i,j] = n
+            return pos, x_xi, x_theta, n_
+
+
+
+
+
+
+
+
+
 
 
     #------------------------------------------------------------------------------
@@ -2911,11 +3001,11 @@ class Model():
                         (hSol, fkk, Kkk, gN, ExitCode, Contri_sl, fl, iterLoc )=\
                             self.contri1GQP_Int2Int(\
                             current_curves,\
-                            hFG,
                             xiGQP,\
-                            WxiGQP,\
                             thetaGQP,\
+                            WxiGQP,\
                             WthetaGQP,\
+                            hFG,
                             value_in)
                         if ExitCode != 1:
                             self.fullLocScheme(current_curves,
@@ -3047,14 +3137,17 @@ class Model():
     #
     #------------------------------------------------------------------------------
     def contri1GQP_Int2Int(\
-                        self,\
+                        self,
                         id_curves,
+                        xi_sl,
+                        theta_sl,
+                        Wxi_sl,
+                        Wtheta_sl,
                         hFG,
-                        xi_sl,\
-                        Wxi_sl,\
-                        theta_sl,\
-                        Wtheta_sl,\
                         value):
+
+        assert id_curves[0] in self.slave_curves_ids
+        assert id_curves[1] in self.master_curves_ids
 
         id_els = self.el_per_curves[id_curves,].ravel()
         assert id_els.shape == (4,)
@@ -3080,6 +3173,7 @@ class Model():
                 self.ContactTable.alpha,\
                 value,
                 SMOOTH_LAW)
+
         elif self.ContactTable.enforcement == 1:
             # (hSl, f, K, gN, ExitCode, Contri_sl) =\
             if self.contact_law == 0:
@@ -3135,7 +3229,6 @@ class Model():
         res = 1 + tol
         hM = array(hFG)
         iiter = 0
-        set_trace()
         while res > tol:
             h = np.concatenate((hQP, hM))
             f,K = self.eval_loc_pder(id_curves, h)
@@ -3144,7 +3237,7 @@ class Model():
             iiter +=1
             if iiter >= 20:
                 raise ValueError
-        return hM
+        return hM, f
 
 
 

@@ -769,11 +769,10 @@ def get_vertices_from_chunk_cells(grid, Con, cells):
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def getAABBLim(X):
+def getAABBLim(X, Safety_Factor = 0):
     assert X.shape[0] >0 and X.shape[1] == 3
-
-    return array([ np.min(X , axis = 0),\
-            np.max(X, axis = 0)] )
+    return array([ np.min(X , axis = 0) - Safety_Factor,\
+            np.max(X, axis = 0) + Safety_Factor] )
 
 
 
@@ -842,11 +841,12 @@ def plot_AABB(lim, s_in = 0. ):
    # The stripper filter cleans up connected lines
    lines = mlab.pipeline.stripper(src)
    mlab.pipeline.surface(lines, line_width=1, opacity=.4)
+   mlab.points3d(Pts[:,0], Pts[:,1], Pts[:,2], mode = 'point', name = 'vertices aabb')
 
 #------------------------------------------------------------------------------
 #
 #-----------------------------------------------------------------------------
-def is_point_in_AABB(aabb, Pt):
+def is_in_AABB(aabb, Pt):
     xmin, ymin, zmin, xmax, ymax, zmax = aabb.flatten()
     return (xmin <= Pt[0] <= xmax) and\
     (ymin <= Pt[1] <= ymax) and\
