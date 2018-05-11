@@ -137,8 +137,6 @@ class Model():
     ################################################################################
 
 
-
-
     ################################################################################
                             # SETTERS
     ################################################################################
@@ -150,6 +148,7 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
+    # TODO: change this with pythonic syntax
     def set_u(self, u):
         """
         this method is aimed for the 'classical' finite element where the displacements are
@@ -168,7 +167,6 @@ class Model():
         self.dir1 = dir1
         self.dir2 = dir2
 
-
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
@@ -181,7 +179,6 @@ class Model():
         for ElPerYarni in ElPerYarn:
             assert ElPerYarni.dtype == np.int
         self.ElPerYarn = ElPerYarn
-
 
     #------------------------------------------------------------------------------
     #
@@ -309,12 +306,12 @@ class Model():
             self.nslave_curves), dtype = bool)
 
         self.is_set_master_and_slave_curves = True
-
-
         # which curve belongs to which yarn
         self.set_curves_per_yarn()
         # initial check to ensure that we start from a C1 surface
         self.CheckContinuitySurface()
+        self.contact_detection_procedure = 'recursive centroid line div'
+
 
     #------------------------------------------------------------------------------
     #
@@ -457,76 +454,6 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def broad_phase(self,):
-        Tab= self.ContactTable
-        self.generate_surface_grid_all_curves()
-        AS_CORRECT = True
-        cells_intersect = dict(id_s = [],
-                id_m = [],
-                id_cells = [])
-
-        # construct recursive AABB intersecttion
-        for ii in self.slave_curves_ids:
-            for jj in self.master_curves_ids:
-                cells_collide, id_cells =\
-                        Utilities.recursive_AABB(
-                                self.grid_surf_points[ii],
-                                self.grid_surf_points[jj],
-                                Tab.cell_connectivity,
-                                Tab.grid_cell)
-
-                if cells_collide:
-                    cells_intersect['id_s'].append(ii)
-                    cells_intersect['id_m'].append(jj)
-                    assert id_cells.ndim == 2 and id_cells.shape[1] == 4
-                    cells_intersect['id_cells'].append(id_cells)
-
-                    """
-                    glyph0 = Utilities.scatter3d(
-                            self.grid_surf_points[ii].reshape(-1,3),
-                            color = (1., 1., 0.),
-                            mode = 'point')
-                    glyph1 = Utilities.scatter3d(
-                            self.grid_surf_points[jj].reshape(-1,3),
-                            color = (0., 1., 0.),
-                            mode='point')
-                    """
-
-                    for (kk,ll,mm,nn) in id_cells:
-                        cell_0 = np.ravel_multi_index((kk,ll ), Tab.grid_cell.shape )
-                        cell_1 = np.ravel_multi_index((mm,nn ), Tab.grid_cell.shape )
-                        """
-                        # draw the cells
-                        plot_cell(self.grid_surf_points[ii] , cell_0, Tab.cell_connectivity, color = (1.,0.,0.))
-
-                        plot_cell(self.grid_surf_points[jj] , cell_1, Tab.cell_connectivity, color = (1.,1.,0.))
-                        """
-                        # sanity check
-                        chunk_vrtx_coord_0 = get_vertices_from_chunk_cells(\
-                                self.grid_surf_points[ii],Tab.cell_connectivity,
-                                array([cell_0]))
-                        chunk_vrtx_coord_1 = get_vertices_from_chunk_cells(\
-                                self.grid_surf_points[jj],Tab.cell_connectivity,
-                                array([cell_1]))
-                        # create AABBs
-                        aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
-                        aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
-                        # DO NOT REMOVE THIS CHECK
-                        assert Utilities.collision_AABB(aabb0, aabb1)
-
-                        """
-                        plot_AABB(aabb0 , s_in = 0. )
-                        plot_AABB(aabb1 , s_in=  1. )
-                        set_trace()
-                        """
-
-        assert len(cells_intersect['id_s']) == len(cells_intersect['id_m'])
-        assert len(cells_intersect['id_s']) == len(cells_intersect['id_cells'])
-        return cells_intersect
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
     def generate_surface_grid_all_curves(self):
         # construct slave obb around entire slave curve
         Tab = self.ContactTable
@@ -548,8 +475,8 @@ class Model():
             if not self.is_set_ContactTable:
                 raise ValueError('The contact table must be set! Use set_Contact_Table method ')
             # ABB intersection
-            cells_intersect = self.broad_phase()
-            AS_correct = self.narrow_phase(cells_intersect)
+            self.broad_phase()
+            AS_correct = self.narrow_phase()
             set_trace()
         else:
             # only restricted to a few number of curves
@@ -563,6 +490,235 @@ class Model():
         assert isinstance(AS_correct, bool)
         return AS_correct
 
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def plot_lines_between_pair_surface(self, idc_0, idc_1, h_c0, h_c1, GN):
+        shape_arr = h_c0.shape[:2]
+        x0 = zeros(shape_arr + (3,) , dtype = float)
+        x1 = zeros(shape_arr + (3,) , dtype = float)
+        assert x0.shape[:2] == GN.shape
+        for i in range(shape_arr[0]):
+            for j in range(shape_arr[1]):
+                x0[i,j] = self.get_surf_point_smoothed_geo(idc_0, h_c0[i,j])
+                x1[i,j] = self.get_surf_point_smoothed_geo(idc_1, h_c1[i,j])
+
+        # Create the points
+        x0 = x0.reshape(-1,3)
+        x1 = x1.reshape(-1,3)
+        GN = GN.flatten()
+        x = np.vstack( (x0[:,0],  x1[:,0])).T.ravel()
+        y = np.vstack( (x0[:,1],  x1[:,1])).T.ravel()
+        z = np.vstack( (x0[:,2],  x1[:,2])).T.ravel()
+        s = np.vstack( (GN,  GN)).T.flatten()
+        src = mlab.pipeline.scalar_scatter(x, y, z, s)
+        connections = np.arange(2 * x0.shape[0]).reshape(-1,2)
+        # Connect them
+        src.mlab_source.dataset.lines = connections
+        # The stripper filter cleans up connected lines
+        lines = mlab.pipeline.stripper(src)
+
+        src.update()
+        # Finally, display the set of lines
+        mlab.pipeline.surface(lines, colormap='Accent', line_width=1, opacity=.4)
+        scalar_lut_manager = lines.children[0].scalar_lut_manager
+        scalar_lut_manager.show_scalar_bar = True
+        scalar_lut_manager.data_name = 'gN'
+
+        mlab.points3d(\
+                x0[:,0],
+                x0[:,1],
+                x0[:,2], mode = 'point',\
+                        color = (1.,1.,1.) )
+
+        mlab.points3d(\
+                x1[:,0],
+                x1[:,1],
+                x1[:,2], mode = 'point',\
+                        color = (0.,0.,0.) )
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def check_current_active_set(self, stp = 0):
+        Tab = self.ContactTable
+        # restore attribute
+        AS_correct = self.choose_active_set(stp)
+        assert isinstance(AS_correct, bool)
+
+        if not self.brute_force:
+            if self.enforcement == 0:
+                # regularizes the penalty stiffnesses if necessary
+                try:
+                    PenaltyCorrect = Tab.PenaltyRegularization()
+                except MaximumPenetrationError:
+                    self.plot(opacity = 0.1)
+                    idGQP = np.argwhere(Tab.gN < Tab.critical_penetration)
+                    pts = self.plot_set_GQP(idGQP)
+                    pts.glyph.glyph.scale_factor = 0.05
+                    set_trace()
+                    self.choose_active_set()
+                    AS_correct = Tab.PenaltyRegularization()
+            if self.enforcement == 0:
+                return AS_correct and PenaltyCorrect
+            elif self.enforcement == 1:
+                return AS_correct
+        else:
+            return AS_correct
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def broad_phase(self,):
+        Tab= self.ContactTable
+        AS_CORRECT = True
+        if self.contact_detection_procedure == 'bounding boxes around cells':
+            self.generate_surface_grid_all_curves()
+            cells_intersect = dict(id_s = [],
+                    id_m = [],
+                    id_cells = [])
+
+            # construct recursive AABB intersecttion
+            for ii in self.slave_curves_ids:
+                for jj in self.master_curves_ids:
+                    cells_collide, id_cells =\
+                            Utilities.recursive_AABB(
+                                    self.grid_surf_points[ii],
+                                    self.grid_surf_points[jj],
+                                    Tab.cell_connectivity,
+                                    Tab.grid_cell)
+
+                    if cells_collide:
+                        cells_intersect['id_s'].append(ii)
+                        cells_intersect['id_m'].append(jj)
+                        assert id_cells.ndim == 2 and id_cells.shape[1] == 4
+                        cells_intersect['id_cells'].append(id_cells)
+
+                        """
+                        glyph0 = Utilities.scatter3d(
+                                self.grid_surf_points[ii].reshape(-1,3),
+                                color = (1., 1., 0.),
+                                mode = 'point')
+                        glyph1 = Utilities.scatter3d(
+                                self.grid_surf_points[jj].reshape(-1,3),
+                                color = (0., 1., 0.),
+                                mode='point')
+                        """
+
+                        for (kk,ll,mm,nn) in id_cells:
+                            cell_0 = np.ravel_multi_index((kk,ll ), Tab.grid_cell.shape )
+                            cell_1 = np.ravel_multi_index((mm,nn ), Tab.grid_cell.shape )
+                            """
+                            # draw the cells
+                            plot_cell(self.grid_surf_points[ii] , cell_0, Tab.cell_connectivity, color = (1.,0.,0.))
+
+                            plot_cell(self.grid_surf_points[jj] , cell_1, Tab.cell_connectivity, color = (1.,1.,0.))
+                            """
+                            # sanity check
+                            chunk_vrtx_coord_0 = get_vertices_from_chunk_cells(\
+                                    self.grid_surf_points[ii],Tab.cell_connectivity,
+                                    array([cell_0]))
+                            chunk_vrtx_coord_1 = get_vertices_from_chunk_cells(\
+                                    self.grid_surf_points[jj],Tab.cell_connectivity,
+                                    array([cell_1]))
+                            # create AABBs
+                            aabb0 = getAABBLim(chunk_vrtx_coord_0.reshape(-1,3))
+                            aabb1 = getAABBLim(chunk_vrtx_coord_1.reshape(-1,3))
+                            # DO NOT REMOVE THIS CHECK
+                            assert Utilities.collision_AABB(aabb0, aabb1)
+
+                            """
+                            plot_AABB(aabb0 , s_in = 0. )
+                            plot_AABB(aabb1 , s_in=  1. )
+                            set_trace()
+                            """
+            assert len(cells_intersect['id_s']) == len(cells_intersect['id_m'])
+            assert len(cells_intersect['id_s']) == len(cells_intersect['id_cells'])
+            self.cells_intersect = cells_intersect
+        elif self.contact_detection_procedure == 'recursive centroid line div':
+            raise ValueError
+
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def narrow_phase(self, cells_intersect ):
+        Tab = self.ContactTable
+
+        if self.contact_detection_procedure == 'bounding boxes around cells':
+            current_active_slave = array(Tab.active_set)
+            nxiGQP, nthetaGQP = Tab.nxiGQP, Tab.nthetaGQP
+            nuxiGQP, WnuxiGQP =  np.polynomial.legendre.leggauss(nxiGQP)
+            nuthetaGQP, WnuthetaGQP = np.polynomial.legendre.leggauss(nthetaGQP)
+            AS_correct = True
+            slave_candi = np.unique(cells_intersect['id_s'])
+            for slave in slave_candi:
+                ind = np.where(cells_intersect['id_s'] == slave)
+                # only for the time being
+                assert ind[0].shape[0] <= 1
+                master = array(cells_intersect['id_m'])[ind]
+                # generate the intervals of cells on master and slave surface
+                id_cells = cells_intersect['id_cells'][int(ind[0])]
+                row_min_sl = np.min(id_cells[:,0])
+                row_max_sl = np.max(id_cells[:,0])
+                col_min_sl = np.min(id_cells[:,1])
+                col_max_sl = np.max(id_cells[:,1])
+                row_min_mstr = np.min(id_cells[:,2])
+                row_max_mstr = np.max(id_cells[:,2])
+                col_min_mstr = np.min(id_cells[:,3])
+                col_max_mstr = np.max(id_cells[:,3])
+
+                sl_dom = Tab.grid_cell[row_min_sl:row_max_sl + 1, col_min_sl:col_max_sl+1].ravel()
+                mstr_dom = Tab.grid_cell[row_min_mstr:row_max_mstr + 1,
+                        col_min_mstr:col_max_mstr+1].ravel()
+                samp_pts_mstr = []
+                nxi_s = 10
+                ntheta_s = 10
+                self.plot(opacity = 0.3)
+                for cell in Tab.grid_cell.ravel():
+                    if cell in sl_dom:
+                        color = (1.,0.,0.)
+                    else:
+                        color = (1., 0.,0.)
+                    self.plot_cell(slave, cell, color = color)
+
+                for cell in Tab.grid_cell.ravel():
+                    if cell in mstr_dom:
+                        color = (1.,0.,0.)
+                    else:
+                        color = (1., 0.,0.)
+                    self.plot_cell(master, cell, color = color)
+                set_trace()
+
+
+                for cell in mstr_dom.ravel():
+                    smp_cell = self.sample_points_on_cell(master, cell, nxi_s, ntheta_s)
+                    samp_pts_mstr.append(smp_cell)
+                    Utilities.scatter3d(smp_cell.reshape(-1,3))
+                    set_trace()
+
+                ncell = len(mstr_dom.ravel())
+                samp_pts_mstr = np.concatenate([samp_pts_mstr[i] for i in range(ncell)]).reshape(-1,3)
+                assert samp_pts_mstr.shape == (ncell * nxi_s * ntheta_s, 3)
+                set_trace()
+
+                for cell in sl_dom.ravel():
+                    for i in range(Tab.nxiGQP):
+                        for j in range(Tab.ntheta_sampled):
+                            nuxi = nuxiGQP[i]
+                            Wxi  = WnuxiGQP[i]
+                            nutheta = nuthetaGQP[j]
+                            Wtheta  = WnuthetaGQP[j]
+                            # get FG
+                            # TODO : enhance and look for solution already computed
+        elif self.contact_detection_procedure == 'recursive centroid line div':
+            raise ValueError
+
+        return AS_correct
 
     #------------------------------------------------------------------------------
     #
@@ -677,9 +833,12 @@ class Model():
         try:
             assert norm(fc[:18].reshape(-1 , 6 )[:, 2,] ) < 1e-10
         except AssertionError:
-            self.plot(opacity=0.2)
+            self.plot_one_smoothed_surface(slv, color = (1., 0., 0.), opacity = 1.)
+            self.plot_one_smoothed_surface(mstr, color = (0., 1., 0.), opacity = 1.)
+            set_trace()
             self.plot_lines_between_pair_surface(slv, mstr, HQP, HBAR, GN)
 
+            """
             xGQP_test = zeros((HQP.shape[1], 3))
             for jj in range(HQP.shape[1]):
                 xGQP_test[jj] = self.get_surf_point_smoothed_geo(slv, HQP[0, jj])
@@ -687,452 +846,12 @@ class Model():
                     xGQP_test[:,1],
                     xGQP_test[:,2],
                     scale_factor = 0.01, color = (0., 0., 1.) )
+            """
             set_trace()
         assert not np.any(np.isnan(fc))
         assert not np.any(np.isnan(Kc))
         assert np.allclose(array(Kc), array(Kc).T)
         return fc, Kc, GN
-
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def plot_lines_between_pair_surface(self, idc_0, idc_1, h_c0, h_c1, GN):
-        shape_arr = h_c0.shape[:2]
-        x0 = zeros(shape_arr + (3,) , dtype = float)
-        x1 = zeros(shape_arr + (3,) , dtype = float)
-        assert x0.shape[:2] == GN.shape
-        for i in range(shape_arr[0]):
-            for j in range(shape_arr[1]):
-                x0[i,j] = self.get_surf_point_smoothed_geo(idc_0, h_c0[i,j])
-                x1[i,j] = self.get_surf_point_smoothed_geo(idc_1, h_c1[i,j])
-
-        # Create the points
-        x0 = x0.reshape(-1,3)
-        x1 = x1.reshape(-1,3)
-        GN = GN.flatten()
-        x = np.vstack( (x0[:,0],  x1[:,0])).T.ravel()
-        y = np.vstack( (x0[:,1],  x1[:,1])).T.ravel()
-        z = np.vstack( (x0[:,2],  x1[:,2])).T.ravel()
-        s = np.vstack( (GN,  GN)).T.flatten()
-        src = mlab.pipeline.scalar_scatter(x, y, z, s)
-        connections = np.arange(2 * x0.shape[0]).reshape(-1,2)
-        # Connect them
-        src.mlab_source.dataset.lines = connections
-        # The stripper filter cleans up connected lines
-        lines = mlab.pipeline.stripper(src)
-
-        src.update()
-        # Finally, display the set of lines
-        mlab.pipeline.surface(lines, colormap='Accent', line_width=1, opacity=.4)
-        scalar_lut_manager = lines.children[0].scalar_lut_manager
-        scalar_lut_manager.show_scalar_bar = True
-        scalar_lut_manager.data_name = 'gN'
-
-        mlab.points3d(\
-                x0[:,0],
-                x0[:,1],
-                x0[:,2], mode = 'point',\
-                        color = (1.,1.,1.) )
-
-
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def check_current_active_set(self, stp = 0):
-        Tab = self.ContactTable
-        # restore attribute
-        AS_correct = self.choose_active_set(stp)
-        assert isinstance(AS_correct, bool)
-
-        if not self.brute_force:
-            if self.enforcement == 0:
-                # regularizes the penalty stiffnesses if necessary
-                try:
-                    PenaltyCorrect = Tab.PenaltyRegularization()
-                except MaximumPenetrationError:
-                    self.plot(opacity = 0.1)
-                    idGQP = np.argwhere(Tab.gN < Tab.critical_penetration)
-                    pts = self.plot_set_GQP(idGQP)
-                    pts.glyph.glyph.scale_factor = 0.05
-                    set_trace()
-                    self.choose_active_set()
-                    AS_correct = Tab.PenaltyRegularization()
-            if self.enforcement == 0:
-                return AS_correct and PenaltyCorrect
-            elif self.enforcement == 1:
-                return AS_correct
-        else:
-            return AS_correct
-
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def narrow_phase(self, cells_intersect ):
-        Tab = self.ContactTable
-        current_active_slave = array(Tab.active_set)
-        nxiGQP, nthetaGQP = Tab.nxiGQP, Tab.nthetaGQP
-        nuxiGQP, WnuxiGQP =  np.polynomial.legendre.leggauss(nxiGQP)
-        nuthetaGQP, WnuthetaGQP = np.polynomial.legendre.leggauss(nthetaGQP)
-
-        AS_correct = True
-
-        slave_candi = np.unique(cells_intersect['id_s'])
-        for slave in slave_candi:
-            ind = np.where(cells_intersect['id_s'] == slave)
-            # only for the time being
-            assert ind[0].shape[0] <= 1
-            master = array(cells_intersect['id_m'])[ind]
-            # generate the intervals of cells on master and slave surface
-            id_cells = cells_intersect['id_cells'][int(ind[0])]
-            row_min_sl = np.min(id_cells[:,0])
-            row_max_sl = np.max(id_cells[:,0])
-            col_min_sl = np.min(id_cells[:,1])
-            col_max_sl = np.max(id_cells[:,1])
-            row_min_mstr = np.min(id_cells[:,2])
-            row_max_mstr = np.max(id_cells[:,2])
-            col_min_mstr = np.min(id_cells[:,3])
-            col_max_mstr = np.max(id_cells[:,3])
-
-            sl_dom = Tab.grid_cell[row_min_sl:row_max_sl + 1, col_min_sl:col_max_sl+1].ravel()
-            mstr_dom = Tab.grid_cell[row_min_mstr:row_max_mstr + 1,
-                    col_min_mstr:col_max_mstr+1].ravel()
-            samp_pts_mstr = []
-            nxi_s = 10
-            ntheta_s = 10
-            self.plot(opacity = 0.3)
-            for cell in Tab.grid_cell.ravel():
-                if cell in sl_dom:
-                    color = (1.,0.,0.)
-                else:
-                    color = (1., 0.,0.)
-                self.plot_cell(slave, cell, color = color)
-
-            for cell in Tab.grid_cell.ravel():
-                if cell in mstr_dom:
-                    color = (1.,0.,0.)
-                else:
-                    color = (1., 0.,0.)
-                self.plot_cell(master, cell, color = color)
-            set_trace()
-
-
-            for cell in mstr_dom.ravel():
-                smp_cell = self.sample_points_on_cell(master, cell, nxi_s, ntheta_s)
-                samp_pts_mstr.append(smp_cell)
-                Utilities.scatter3d(smp_cell.reshape(-1,3))
-                set_trace()
-
-            ncell = len(mstr_dom.ravel())
-            samp_pts_mstr = np.concatenate([samp_pts_mstr[i] for i in range(ncell)]).reshape(-1,3)
-            assert samp_pts_mstr.shape == (ncell * nxi_s * ntheta_s, 3)
-            set_trace()
-
-            for cell in sl_dom.ravel():
-                for i in range(Tab.nxiGQP):
-                    for j in range(Tab.ntheta_sampled):
-                        nuxi = nuxiGQP[i]
-                        Wxi  = WnuxiGQP[i]
-                        nutheta = nuthetaGQP[j]
-                        Wtheta  = WnuthetaGQP[j]
-                        # get FG
-                        # TODO : enhance and look for solution already computed
-
-
-
-
-
-        return AS_correct
-        """
-
-            master_close = cells_intersect['id_m'][ii]
-            is_active_slave, idx_in_AS = Tab.query_is_active_slave(slave)
-            nmclose = len(master_close[0])
-            set_trace()
-
-            if is_active_slave and nmclose == 0:
-                if np.all(Tab.gN[idx_in_AS]) > 0:
-                    Tab.del_contact_element(idx_in_AS)
-                    print('el deacti')
-                    is_active_slave = False
-                    AS_modified = True
-                else:
-                    self.plot_integration_interval(
-                            self.el_per_curves[slave],
-                            array([0, 1.]),
-                            array([0, 2 * np.pi]),
-                            opacity = 1., color = (0.,0.,0.) )
-                    plot_AABB(self.aabb_vrtx[slave])
-                    set_trace()
-                    raise ValueError('sudden loss of contact not allowed')
-
-            if  nmclose >0:
-                assert np.array_equal(np.unique(master_close), np.sort(
-                    np.array(master_close).ravel()))
-
-                id_els_sl = self.el_per_curves[slave]
-                # construct slave obb around entire slave curve
-                samp_slave = self.sample_surf_point_on_smooth_geo(\
-                        id_els_sl,\
-                        nxi_sampled,\
-                        ntheta_sampled,\
-                        array([0,1]),
-                        array([0,2*np.pi])).reshape(-1,3)
-                obb_slave = build_obb(samp_slave)
-                bi = self.control_points(slave)
-                obb_slave = build_obb(samp_slave)
-
-
-                # master obb(s)
-                samp_on_master_candi =\
-                        zeros( (len(master_close[0]), nxi_sampled , ntheta_sampled,
-                    3), dtype = np.float)
-                obb_master = []
-
-                for uu, id_m, in enumerate(master_close[0]):
-                    samp_on_master_candi[uu]=\
-                        self.sample_surf_point_on_smooth_geo(\
-                            self.el_per_curves[(id_m),].ravel(),
-                            nxi_sampled,\
-                            ntheta_sampled,\
-                            xi_lim_mstr,\
-                            theta_lim_mstr)
-                    obb_master.append(build_obb(samp_on_master_candi[uu]))
-
-                # is there intersection between the OBB containing the whole slave curve and the
-                # master one ?
-                collision_obb = False
-                for uu, obb_m in enumerate(obb_master):
-                    if collision_btw_obb(obb_m, obb_slave, eps = 1e-10):
-                        collision_obb = True
-
-
-                if collision_obb:
-                    # a closer look at the penetration is needed
-                    check_penetration_cells = True
-                    # establish the limit of the integration domain
-                    # construct obb for each slave domain
-                    obb_slv_II = []
-                    # determine which slave_obb has an intersection with a master_obb
-                    has_int_xi_lim = []
-                    has_int_theta_lim = []
-                    for (ii,jj) in product(range(Tab.xi_lim.shape[0]),\
-                            range(Tab.theta_lim.shape[0])):
-                        samp_slv_II =\
-                            self.sample_surf_point_on_smooth_geo(\
-                                id_els_sl, nxi_sampled,\
-                                ntheta_sampled,\
-                                Tab.xi_lim[ii],
-                                Tab.theta_lim[jj])
-                        obb_slv_II.append(build_obb(samp_slv_II.reshape(-1,3) ))
-                        # get teh traid at the beginning of the interval
-
-                        for uu, obb_m in enumerate(obb_master):
-                            if collision_btw_obb(obb_slv_II[-1], obb_m):
-                                has_int_xi_lim.append(Tab.xi_lim[ii])
-                                has_int_theta_lim.append(Tab.theta_lim[jj])
-
-                                # DO NOT DELETE THESE LINES
-                                self.plot_integration_interval(
-                                    self.el_per_curves[slave],
-                                    Tab.xi_lim[ii],
-                                    Tab.theta_lim[jj],
-                                    opacity = 1., color = (0.,0.,0.) )
-
-                                plot_obb_vertices(obb_slv_II[-1]  , (0.,0.,0.))
-                                # build obb from convex hull to compare
-                                obb_hull = build_obb(samp_slv_II.reshape(-1,3), use_convex_hull = True)
-                                plot_obb_vertices(obb_hull  , (1.,0.,0.))
-                                scatter_3d( samp_on_master_candi[uu].reshape(-1,3), color = (1.,1.,1.))
-                                plot_obb_vertices(obb_m, (1.,1.,1.))
-                                set_trace()
-
-
-                    if len(has_int_xi_lim) == 0 or len(has_int_theta_lim) == 0 :
-                        raise ValueError('No slave interval intersecting master curves has not been found')
-
-                    # construct integration interval from intersection between obb
-                    has_int_xi_lim = asarray(has_int_xi_lim)
-                    has_int_theta_lim = asarray(has_int_theta_lim)
-
-                    # this interval will be the one on which we will construct the cells
-                    xi_lim_slv, theta_lim_slv = self.extract_slave_interval(
-                            has_int_xi_lim, has_int_theta_lim)
-
-                    # TODO: must be generalized
-                    # number of cells along the xi and theta axis
-                    nxi_slice = int(Tab.n_cells_xi_per_slice)
-                    ntheta_slice = int(Tab.n_cells_theta_per_slice)
-
-                    # cut the interval in unit cell
-                    KSI, con = generation_grid_quadri_and_connectivity(
-                            xi_lim_slv, theta_lim_slv, nxi_slice, ntheta_slice)
-                    # convective coord center of the cell
-                    KSIC = 0.5 * (KSI[con[:,0],] + KSI[con[:,2],] )
-                    # area in the space of the convective coordinates for each cell (they all have
-                    # the same weigth)
-                    wxi =  (KSI[con[:,1],] - KSI[con[:,0],])[:,0]
-                    wtheta = (KSI[con[:,3],] - KSI[con[:,0],])[:,1]
-
-                    if Tab.enforcement == 1:
-                        weak_enforcement_new, weak_constraint = (0,) * 2
-
-                    KSISol = zeros((KSIC.shape[0], 2), dtype = float)
-                    gNSol = zeros((KSIC.shape[0]), dtype = float)
-                    IDM = zeros((KSIC.shape[0]), dtype = int)
-
-                    # for each cell, measure gN at its center
-                    for ii, KSICii in enumerate(KSIC):
-                        #TODO: if some info from the previous increment is available, use it
-                        xGQP = self.get_surf_point_smoothed_geo(id_els_sl, KSICii)
-                        # among the possible master candidates, spot the closest sampled
-                        # point from the current GQP
-                        d_FG = np.inf
-                        # TODO : if I reshape the array of sampled points on the master and I
-                        # use unravel_index, I avoid the for loop
-                        for uu in range(nmclose):
-                            Dist = norm((samp_on_master_candi[uu]- xGQP), axis = 2)
-                            idx = np.unravel_index( Dist.argmin(), (samp_on_master_candi[uu].shape[:2]))
-                            if Dist[idx] < d_FG:
-                                d_FG = Dist[idx]
-                                idx_min = (uu, idx[0], idx[1])
-
-                        current_mcurve = master_close[0][idx_min[0]]
-                        hFG = array([xi_mstr[idx_min[1]], theta_mstr[idx_min[2]]])
-                        current_curves = array([slave, current_mcurve])
-                        id_els = self.el_per_curves[(current_curves,)].ravel()
-                        # do not remove this assert. Otherwise would be very hard to debug
-                        assert np.allclose(samp_on_master_candi[(idx_min)],\
-                            self.get_surf_point_smoothed_geo(id_els[(2,3),], hFG))
-
-                        Sol_correct = 0
-                        ct_corrections = 0
-
-                        # siolve the minimum distance problem at each center of a cell
-                        while not Sol_correct:
-                            (gNii, hii,
-                                    w_ii,\
-                                    ExitCode) = \
-                                    self.gN_GQP_IntInt2IntInt(\
-                                    current_curves,\
-                                    KSICii[0],
-                                    wxi[ii],
-                                    KSICii[1],
-                                    wtheta[ii],
-                                    hFG)
-
-
-                            assert ExitCode == 1
-                            if not -1e-10 < hii[0] < 1+1e-10:
-                                if hii[0] < 0 :
-                                    assert hii[0] > -1.
-                                    hFG = np.asarray(hii)
-                                    hFG[0] = 1
-                                    current_mcurve -= 1
-                                    current_curves = array([slave, current_mcurve])
-
-                                elif hii[0] > 1 :
-                                    assert hii[0] < 2
-                                    hFG = np.asarray(hii)
-                                    hFG[0] = 0
-                                    current_mcurve += 1
-                                    current_curves = array([slave, current_mcurve])
-                                ct_corrections += 1
-                                if ct_corrections >= 5:
-                                    raise ValueError('could not find master curve')
-                            else:
-                                Sol_correct = 1
-
-
-
-                            if gNii < Tab.critical_penetration:
-                                # Fatal error
-                                plot_problematic_area()
-
-                                set_trace()
-                                xGQP = self.get_surf_point_smoothed_geo(id_els_sl,
-                                        KSICii)
-
-                                (gNii, hii,
-                                    w_ii,\
-                                    ExitCode) = \
-                                    self.gN_GQP_IntInt2IntInt(\
-                                    current_curves,\
-                                    KSICii[0],
-                                    wxi[ii],
-                                    KSICii[1],
-                                    wtheta[ii],
-                                    hFG)
-
-                            if Tab.enforcement == 1:
-                                raise NotImplementedError('deprectd')
-                                if is_active_slave:
-                                    # interpolate LM
-                                    set_trace()
-                                    LMnm
-                                    # TODO
-                                    weak_enforcement_new += LMnm * w_ii
-                                else:
-                                    weak_constraint += w_ii * gNii
-
-                        KSISol[ii] = hii
-                        gNSol[ii] = gNii
-                        IDM[ii] = int(current_curves[1])
-
-                    #self.plot_all_cells_centers_and_gap(current_curves[0], KSICii, KSISol, gNSol, IDM)
-
-
-            # was the slave already present in the contact list ?
-            # if not create new entry in the contact table
-            if Tab.enforcement == 1:
-                raise ValueError('Deprecated')
-                if is_active_slave and weak_enforcement > 0:
-                     to_deactivate.append(slave)
-                else:
-                    if weak_constraint < 0:
-                        set_trace()
-                        to_activate.append(slave)
-                        # store the results of the contact detection
-
-            if check_penetration_cells :
-
-                # select all the cells where the gap is small enough as part of
-                # the integration domain
-                active_cells = np.argwhere(gNSol <  Tab.epsilon).flatten()
-                if is_active_slave:
-                    if active_cells.shape[0] == 0:
-                        set_trace()
-                        to_deactivate.append(slave)
-                        print('complete deactivation needed')
-                    else:
-                        id_sl_c = np.argwhere(array(Tab.active_set) == slave).ravel()
-                        assert id_sl_c.shape[0] == 1
-                        prev_active_cells = Tab.active_cells[int(id_sl_c)]
-                        # have the active cells changed ?
-                        if not( (len(prev_active_cells) == len(active_cells)) and \
-                                (np.allclose(np.sort(prev_active_cells), np.sort(active_cells) ) ) ):
-                            #if stp == 39: set_trace()
-                            AS_modified = True
-                            # update the set of active_cells
-                            Tab.modify_set_of_active_cells(
-                                    int(id_sl_c), active_cells)
-                            print('change in the set of active cells')
-                        else:
-                            # the active_cells stayed the same
-                            print('no change in active cells')
-                else:
-                    if nmclose >0:
-                        if collision_obb:
-                            if active_cells.shape[0] > 0:
-                                Tab.new_el(slave, active_cells,\
-                                        IDM, KSISol, KSI, con )
-                                AS_modified = True
-            else:
-                if is_active_slave:
-                    raise ValueError('the element was active but all of its cells for deactivated at once. Dangerous')
-        return AS_correct
-        """
 
 
     #------------------------------------------------------------------------------
@@ -1662,6 +1381,8 @@ class Model():
             color=(1.,0.,0.), opacity = 0.5):
         id_els = self.el_per_curves[id_c,]
 
+        assert id_els.shape == (2,)
+
         pos = self.sample_surf_point_on_smooth_geo(id_els, nxi,
                 ntheta,\
                 xi_lim = array([0,1]),\
@@ -1760,8 +1481,7 @@ class Model():
         for ii in range(self.nCurves):
             if not same_color:
                 color = tuple(np.random.rand(3))
-            id_els = self.el_per_curves[ii]
-            self.plot_one_smoothed_surface(id_els, nxi, ntheta, color , opacity)
+            self.plot_one_smoothed_surface(ii, nxi, ntheta, color , opacity)
 
     #------------------------------------------------------------------------------
     #
@@ -1779,36 +1499,35 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def plot_smoothed_centroid_lines(self, same_color = 0, color = (0.,0.,0.)):
-        Tab = self.ContactTable
-        assert Tab.smoothing
-        if not Tab.smoothing_type == 'splines': raise NotImplementedError
-        nctc = Tab.gN.shape[0]
-        nxi = 10
+    def plot_centroid_line_smoothed(self, idc,  color = (0.,1.,0.)):
+        nxi = 30
         xi = np.linspace(0, 1, nxi)
-        Phi = zeros((nctc, 2, nxi, 3), dtype = np.float)
-        for ii in range(nctc):
-            for jj, xjj in enumerate(xi):
-                for idc in range(2):
-                    Phi[ii, idc, jj] =\
-                    self.get_phi_smoothed(ii,idc,xjj)
+        Phi = zeros(xi.shape + (3,), dtype = np.float)
+        for ii, xii in enumerate(xi):
+            Phi[ii] = self.get_centroid_point_smoothed_geo(idc,xii)
+        bi = self.control_points(idc)
+        assert np.allclose(bi[0], Phi[0])
 
-        if same_color:
-            # same color for every pair
-            # note here how to replicate a tuple
-            color_per_pair = (color,) * nctc
-        else:
-            color_per_pair = [tuple(np.random.rand(3)) for i in
-                    range(nctc)]
+        mlab.points3d(Phi[:,0],
+                Phi[:,1],
+                Phi[:,2],
+                mode = 'point',
+                color = (1.,0.,0.))
+        return mlab.plot3d(Phi[:,0],
+                Phi[:,1],
+                Phi[:,2],
+                tube_radius = None,
+                color = color)
 
-        for ii in range(nctc):
-            for idc in range(2):
-                mlab.plot3d(Phi[ii][idc][:,0],
-                            Phi[ii][idc][:,1],
-                            Phi[ii][idc][:,2],
-                            color = color_per_pair[ii],
-                            tube_radius = None)
-                            #representation='wireframe')
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def plot_smoothed_centroid_lines(self, same_color = 0, color = (0.,0.,0.)):
+        for idc in range(self.nCurves):
+            if not same_color:
+                color_per_pair = (np.random.rand(3))
+            self.plot_centroid_line_smoothed(idc, color)
+
 
     #------------------------------------------------------------------------------
     #
@@ -2234,20 +1953,149 @@ class Model():
     #------------------------------------------------------------------------------
     #
     #------------------------------------------------------------------------------
-    def SurfPtAndVects_smoothed(self, id_c, h):
+    def get_centroid_point_smoothed_geo(self, id_c, xi, get_Tgt = 0):
         id_els = self.el_per_curves[id_c]
         b1,b2 = self.el[id_els,]
-        nd_C = asarray([b1.nID[0], b1.nID[1], b2.nID[1]]).ravel()
-        #return s, sxi, stheta, n
-        return GeoSmooth.SurfAndVects(\
-                            self.X[nd_C,].ravel(),\
-                            self.u[nd_C,].ravel(),\
-                            self.v[nd_C,].ravel(),\
-                            np.array([b1.E1, b2.E1]),\
-                            np.array([b1.E2, b2.E2]),\
-                            b1.a , b1.b ,\
-                            self.ContactTable.alpha,\
-                            h)
+        nd_C =  self.nPerEl[id_els,].flatten()[(0,1,3),]
+        return array(GeoSmooth.CentroidPoint(self.X[nd_C,].ravel(),
+                                            self.u[nd_C,].ravel(),
+                                            xi,
+                                            self.ContactTable.alpha,
+                                            get_Tgt))
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def recursive_centroid_line_div(self, id_c, l_tres, beta_tres):
+        get_Beta = lambda x_xi, s : np.arccos( (x_xi.dot(s)) / (norm(x_xi)*norm(s))) % np.pi
+        xi_ends = array([[0,1]], dtype = float)
+        l_segs = zeros(1, dtype = float)
+        betas_max = zeros(1, dtype = float)
+        i = 0
+        nS = xi_ends.shape[0]
+
+        def plot_geo(xi_ends):
+            assert xi_ends.ndim == 2
+            xi_vert = np.concatenate(( array([xi_ends[0,0]]), xi_ends[:,1] ) )
+
+            xi_vert = np.unique(xi_vert)
+            x_xi_vert = zeros(xi_vert.shape + (3,))
+            for ii, xi in enumerate(xi_vert):
+                x_xi_vert[ii] = self.get_centroid_point_smoothed_geo(id_c, xi)
+
+            xi_fine = np.linspace(0, 1, 100)
+            x_curve = zeros(xi_fine.shape + (3,))
+            for ii, xi in enumerate(xi_fine):
+                x_curve[ii] = self.get_centroid_point_smoothed_geo(id_c, xi)
+
+
+            mlab.points3d(x_xi_vert[:,0],
+                         x_xi_vert[:,1],
+                         x_xi_vert[:,2],
+                         mode = 'point',
+                         color = (1.,1.,1.))
+
+            mlab.plot3d(x_curve[:,0],
+                         x_curve[:,1],
+                         x_curve[:,2],
+                         tube_radius = None,
+                         color = (1.,0.,0.))
+
+        while i < nS :
+            xi_endi = xi_ends[i]
+            assert xi_endi[0] < xi_endi[1]
+            xc_i, xc_xi_i = self.get_centroid_point_and_Tgt_smoothed_geo(id_c, xi_endi[0])
+            xc_j, xc_xi_j = self.get_centroid_point_and_Tgt_smoothed_geo(id_c, xi_endi[1])
+            s = xc_j - xc_i
+            l = norm(s)
+            l_segs[i] = l
+
+            if s.dot(xc_xi_i) < 0 :
+                xc_xi_i *= -1
+            if s.dot(xc_xi_j) < 0 :
+                xc_xi_j *= -1
+            betai = get_Beta(xc_xi_i, s)
+            betaj = get_Beta(xc_xi_j, s)
+            betas_max[i] = np.max([betai, betaj])
+
+            if (l > l_tres) or (betai > beta_tres) or  (betaj > beta_tres):
+                assert xi_endi.shape == (2,)
+                xi0, xi1, xi2 = xi_endi[0], 0.5 * (xi_endi[0] + xi_endi[1]) , xi_endi[1]
+                xi_ends[i] = [xi0, xi1]
+                xi_ends =  np.insert(xi_ends, [i+1] , [xi1, xi2]  , axis = 0)
+                l_segs = np.append(l_segs , 0 )
+                betas_max = np.append(betas_max, 0 )
+                nS += 1
+                assert l_segs.shape[0] == nS
+                assert betas_max.shape[0] == nS
+                assert xi_ends.shape[0] == nS
+            else:
+                # go to next segment
+                i += 1
+            if nS > 100:
+                plot_geo(xi_ends)
+                set_trace()
+                raise ValueError('too many division of the centroid line')
+
+        # sanity check
+        assert np.all(l_segs < l_tres)
+        assert np.all(betas_max < beta_tres)
+        #IMPORTANT
+        # at the end of the assembly, we might miss a part of the geometry if there is shearing. To
+        # prevent this, we must extend the cylinders at the end
+        return xi_ends, betas_max, l_segs
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def get_nodes_and_radii_enclosing_cyls(self, id_c, xi_ends, betas_max, l_segs):
+        nS = xi_ends.shape[0]
+        xN = zeros((nS, 2 , 3), dtype = float)
+        rCyl = zeros(nS)
+        id_els = self.el_per_curves[id_c]
+        b1,b2 = self.el[id_els,]
+        a = b1.a
+        l_safety =  np.max(self.a_crossSec)
+
+        for ii in range(nS):
+            xN[ii,0] = self.get_centroid_point_smoothed_geo(id_c, xi_ends[ii][0])
+            xN[ii,1] = self.get_centroid_point_smoothed_geo(id_c, xi_ends[ii][1])
+            rCyl[ii] = 0.5 * a + betas_max[ii] * l_segs[ii] * 0.5
+            # expand the bounding cylinders of the two ends
+            if ii == 0:
+                t1 = (xN[ii,1] - xN[ii,0]) / norm( (xN[ii,1] - xN[ii,0]))
+                xN[ii,0]-= l_safety * t1
+            if ii == (nS - 1):
+                t1 = (xN[ii,1] - xN[ii,0]) / norm( (xN[ii,1] - xN[ii,0]))
+                xN[ii,1]+= l_safety * t1
+        return xN, rCyl
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def plot_enclosing_cyl_1_curve(self, id_c):
+
+        l_tres = np.max(self.b_crossSec)
+        # put 5 degrees as treshold
+        beta_tres = np.radians(5) % np.pi
+
+        xi_ends, betas_max, l_segs = self.recursive_centroid_line_div(id_c, l_tres, beta_tres)
+        xN, rCyl = self.get_nodes_and_radii_enclosing_cyls(id_c, xi_ends, betas_max, l_segs)
+
+        nS = xN.shape[0]
+        for ii in range(nS):
+            xc_i, xc_j = xN[ii]
+            Utilities.plot_straight_cylinder(xN[ii,0], xN[ii,1] , rCyl[ii])
+
+
+
+    #------------------------------------------------------------------------------
+    #
+    #------------------------------------------------------------------------------
+    def get_centroid_point_and_Tgt_smoothed_geo(self, id_c, xi):
+        return self.get_centroid_point_smoothed_geo(id_c, xi, get_Tgt = 1)
 
 
     #------------------------------------------------------------------------------
@@ -2754,24 +2602,7 @@ class Model():
                 999.)
         return h, norm(f)
 
-    #------------------------------------------------------------------------------
-    #
-    #------------------------------------------------------------------------------
-    def get_approx_smallest_dist_between_smoothed_centroid(self,
-            xi_list, Xi, ui, alpha):
-        for arr in [Xi,ui]:assert arr.shape == (2,3)
-        assert 0< alpha<1
-        nxi = xi_list.shape[0]
-        Phi1 = zeros((nxi, 3), dtype = np.float)
-        Phi2 = zeros((nxi, 3), dtype = np.float)
-        for ii, xii in enumerate(xi_list):
-            Phi1[ii] =\
-            SmoothingWtSmoothedVect.CentroidPoint(Xi[0], ui[0] , xii,
-                    Tab.alpha)
-            Phi2[ii] =\
-            SmoothingWtSmoothedVect.CentroidPoint(Xi[1], ui[1] , xii,
-                    Tab.alpha)
-        return cdist(Phi1, Phi2, metric='euclidean').argmin()
+
 
 
     #------------------------------------------------------------------------------

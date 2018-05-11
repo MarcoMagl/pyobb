@@ -854,3 +854,106 @@ def is_in_AABB(aabb, Pt):
 
 
 
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def collide_straight_cylinders(si, ri, sj, rj):
+    assert si.shape == (2,3)
+    assert sj.shape == (2,3)
+    dmin = closest_dist_2_3dlines(si, sj)
+    return dmin - (ri + rj) < 0
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def closest_dist_2_3dlines(si, sj):
+    # https://onlinelibrary.wiley.com/doi/abs/10.1002/%28SICI%291099-0887%28199706%2913%3A6%3C429%3A%3AAID-CNM70%3E3.0.CO%3B2-X
+    # equation 7
+    assert si.shape == (2,3)
+    assert sj.shape == (2,3)
+    b = lambda x : x[0] + x[1]
+    t = lambda x : x[1] - x[0]
+    x_int = lambda x, xi : 0.5 * ((1-xi)*x[0] + (1+xi)*x[1])
+
+    bi = b(si)
+    bj = b(sj)
+    ti = t(si)
+    tj = t(sj)
+
+    if norm(np.cross(ti,tj)) < 1e-10:
+        # vectors are parrallel
+        set_trace()
+        return np.min( [norm(si[0], sj[0]),
+                norm(si[0], sj[1]),
+                norm(si[1], sj[0]),
+                norm(si[1], sj[1])])
+    else:
+        denom = (tj.dot(tj)) * (ti.dot(ti)) - (ti.dot(tj))**2
+        xibar_i = - ( (bj - bi).dot( tj.dot(tj.dot(ti)) - ti.dot(tj.dot(tj))) ) / denom
+        xibar_j =  ( (bj - bi).dot( ti.dot(tj.dot(ti)) - tj.dot(ti.dot(ti))) ) / denom
+        if 0. <= xibar_i <= 1. and 0. <= xibar_j <= 1.:
+            # check orthogonality conditions
+            x_i_bar = x_int(si, xibar_i)
+            x_j_bar = x_int(sj, xibar_j)
+            g = x_j_bar - x_i_bar
+            assert np.allclose(g.dot(ti), 0)
+            assert np.allclose(g.dot(tj), 0)
+        else:
+            if not (0. <= xibar_i <= 1.):
+                if xibar_i <0 :
+                    xibar_i = 0
+                elif xibar_i > 1.:
+                    xibar_i = 1.
+                else:
+                    raise ValueError('UK case')
+
+            if not (0. <= xibar_j <= 1.):
+                if xibar_j <0 :
+                    xibar_j = 0
+                elif xibar_j > 1.:
+                    xibar_j = 1.
+                else:
+                    raise ValueError('UK case')
+            # in this case the orthogonality equations are not respected. The gap is measured at the
+            # end of a cylinder
+            x_i_bar = x_int(si, xibar_i)
+            x_j_bar = x_int(sj, xibar_j)
+            g = x_j_bar - x_i_bar
+
+
+        return np.linalg.norm(x_j_bar - x_i_bar)
+
+
+#------------------------------------------------------------------------------
+#
+#-----------------------------------------------------------------------------
+def plot_straight_cylinder(xc_i, xc_j, r, color = (1.,0.,0.) ):
+    assert xc_i.shape == (3,)
+    assert xc_j.shape == (3,)
+    assert r > 0
+    xi_cyl = np.linspace(0, 1 , 10)
+    theta_cyl = np.linspace(0, 2 * np.pi , 10)
+    grid = np.meshgrid(xi_cyl, theta_cyl)
+    surf_pt = zeros(grid[0].shape + (3,), dtype = float)
+    # orthonormal basis of the cylinder
+    t1 = (xc_j - xc_i) / norm((xc_j - xc_i))
+    t2 = np.cross(t1, np.random.rand(3))
+    t2 /= norm(t2)
+    t3 = np.cross(t1, t2)
+    Mat= array([t1, t2, t3]).T
+    assert isOrthogonal(Mat)
+
+    for ii in range(grid[0].shape[0]):
+        for jj in range(grid[0].shape[1]):
+            xi = grid[0][ii,jj]
+            theta = grid[1][ii, jj]
+            xc = xc_i + xi * (xc_j - xc_i)
+            vloc = r * (np.cos(theta) * t2 +\
+                    np.sin(theta) * t3 )
+            surf_pt[ii,jj] = xc + vloc
+
+    return mlab.mesh(surf_pt[:, :, 0],
+            surf_pt[:, :, 1],
+            surf_pt[:, :, 2],
+            opacity= 1.,
+            color =  color )
